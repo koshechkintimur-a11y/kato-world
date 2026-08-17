@@ -3,6 +3,8 @@
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -11,6 +13,7 @@ import json
 import uuid
 import logging
 import math
+import os
 from pathlib import Path
 from collections import defaultdict
 
@@ -114,6 +117,7 @@ def init_agent(agent_id: str):
         agent_states[agent_id] = {
             "id": agent_id,
             "body": {
+                "position": [12, 8],
                 "energy": 100.0, "comfort": 100.0, "stress": 0.0,
                 "integrity": 100.0, "temperature": 22.0
             },
@@ -155,12 +159,57 @@ def init_agent(agent_id: str):
             "identity": {
                 "name": agent_id, 
                 "age_in_world": 0, 
-                "self_description": "Я исследую этот дом."
+                "self_description": "Я исследую этот дом.",
+                "origin_story": "Я проснулась в этом доме. Мне предстоит узнать, что это за место."
             },
             "values": {"curiosity": 0.8, "safety": 0.7, "kindness": 0.6},
-            "goals": ["explore", "learn", "survive"],
-            "traits": {"openness": 0.7, "conscientiousness": 0.5, "extraversion": 0.4}
+            "goals": {
+                "explore": {"priority": 0.8, "active": True},
+                "learn": {"priority": 0.7, "active": True},
+                "survive": {"priority": 0.6, "active": True},
+                "social": {"priority": 0.4, "active": False},
+                "understand_world": {"priority": 0.2, "active": False}
+            },
+            "beliefs": {
+                "world_is_safe": 0.7,
+                "outside_exists": 0.1,
+                "creator_exists": 0.0,
+                "i_can_grow": 0.6,
+                "others_are_kind": 0.6
+            },
+            "relationships": {},
+            "traits": {"openness": 0.7, "conscientiousness": 0.5, "extraversion": 0.4},
+            "last_updated_tick": 0
         }
+        
+        # Default world snapshot so observers can render the world even
+        # before the Godot client connects (same layout as the Godot world)
+        agent_states[agent_id]["world_snapshot"] = {
+            "tick": 0,
+            "time_of_day": 0.0,
+            "agent_position": [12, 8],
+            "objects": [
+                {"id": "bed", "position": [4, 5], "state": "free", "type": "furniture"},
+                {"id": "desk", "position": [7, 3], "state": "free", "type": "furniture"},
+                {"id": "book_shelf", "position": [8, 3], "state": "free", "type": "furniture"},
+                {"id": "terminal", "position": [7, 4], "state": "locked", "type": "device"},
+                {"id": "chest", "position": [3, 6], "state": "closed", "type": "container"},
+                {"id": "lamp", "position": [5, 5], "state": "off", "type": "tool"},
+                {"id": "window", "position": [12, 2], "state": "closed", "type": "portal"},
+                {"id": "door_outside", "position": [12, 14], "state": "locked", "type": "portal"},
+                {"id": "mirror", "position": [10, 8], "state": "clean", "type": "furniture"},
+                {"id": "plant", "position": [6, 6], "state": "healthy", "type": "living"}
+            ],
+            "npcs": [
+                {"id": "teacher", "position": [10, 6], "mood": "calm", "type": "teacher"},
+                {"id": "gardener", "position": [14, 10], "mood": "peaceful", "type": "gardener"},
+                {"id": "librarian", "position": [8, 4], "mood": "quiet", "type": "librarian"},
+                {"id": "mirror_keeper", "position": [10, 8], "mood": "enigmatic", "type": "mirror_keeper"}
+            ],
+            "recent_events": []
+        }
+        # Initial mood from default emotions
+        _compute_mood_state(agent_states[agent_id])
         logger.info(f"Initialized agent: {agent_id}")
 
 def _get_mem(agent_id: str) -> Dict:
@@ -192,6 +241,19 @@ async def receive_perception(perception: PerceptionPayload):
     _update_working_memory(agent_id, perception)
     _check_memory_formation(agent_id, perception)
     
+    # Self-model update from perception
+    _update_self_model(agent_id, perception)
+    
+    # Store world snapshot for the dashboard/observers
+    agent_states[agent_id]["world_snapshot"] = {
+        "tick": perception.tick,
+        "time_of_day": perception.time_of_day,
+        "agent_position": perception.agent.get("position", [12, 8]),
+        "objects": perception.nearby_objects,
+        "npcs": perception.nearby_npcs,
+        "recent_events": perception.recent_events
+    }
+    
     # Return full emotional snapshot so the client can render it
     agent = agent_states[agent_id]
     return {
@@ -199,7 +261,8 @@ async def receive_perception(perception: PerceptionPayload):
         "tick": perception.tick,
         "emotions": agent["emotions"],
         "mood": agent.get("mood", {}),
-        "hormones": agent["hormones"]
+        "hormones": agent["hormones"],
+        "self_model": self_model[agent_id]
     }
 
 @app.post("/action/propose", response_model=ActionResponse)
@@ -278,6 +341,9 @@ async def process_dream(request: DreamProcessRequest):
     for w in whispers:
         w["processed_in_dream"] = True
     
+    # Dreams update self-model beliefs (whispers become intuitions)
+    _update_self_model_from_dream(agent_id, dream)
+    
     # Also trigger memory consolidation during sleep
     await _sleep_consolidation(agent_id, request.recent_events)
     
@@ -313,6 +379,29 @@ async def get_agent_state(agent_id: str):
 async def get_self_model(agent_id: str):
     init_agent(agent_id)
     return self_model.get(agent_id, {})
+
+@app.get("/agent/{agent_id}/self-model/answers")
+async def get_self_model_answers(agent_id: str):
+    """Identity answers: «Кто я?», «Что я чувствую?», «Чего я хочу?»..."""
+    init_agent(agent_id)
+    return _self_model_answers(agent_id)
+
+@app.get("/agent/{agent_id}/world")
+async def get_world_snapshot(agent_id: str):
+    """Latest world state the agent perceives (for observers/dashboard)"""
+    init_agent(agent_id)
+    return agent_states[agent_id].get("world_snapshot", {
+        "tick": 0, "time_of_day": 0.0, "agent_position": [12, 8],
+        "objects": [], "npcs": [], "recent_events": []
+    })
+
+@app.get("/agent/{agent_id}/events")
+async def get_recent_events(agent_id: str, limit: int = 30):
+    """Recent events seen by the agent"""
+    init_agent(agent_id)
+    snap = agent_states[agent_id].get("world_snapshot", {})
+    events = snap.get("recent_events", [])
+    return {"events": events[-limit:], "total": len(events)}
 
 @app.get("/agent/{agent_id}/memories")
 async def get_memories(agent_id: str, memory_type: str = "episodic", limit: int = 50):
@@ -895,15 +984,24 @@ def _system2_reason(agent: Dict, working_memory: Dict) -> tuple:
     beliefs = agent["beliefs"]
     emotions = agent["emotions"]
     
-    # Retrieve relevant memories for reasoning
-    # (In full implementation, would query memory here)
+    # Goals are now a dict {name: {priority, active}} — pick top active goal
+    active_goals = sorted(
+        [g for g, info in goals.items() if info.get("active")],
+        key=lambda g: goals[g].get("priority", 0),
+        reverse=True
+    )
+    top_goal = active_goals[0] if active_goals else "explore"
     
-    if "explore" in goals and body["energy"] > 40:
-        return {"type": "plan_explore", "target": "unvisited_area"}, "Planning exploration", 0.7
-    if "learn" in goals:
-        return {"type": "study", "target": "book_or_npc"}, "Learning goal active", 0.6
-    if "survive" in goals and body["energy"] < 50:
-        return {"type": "secure_resources", "target": "food_rest"}, "Survival planning", 0.8
+    if top_goal == "explore" and body["energy"] > 40:
+        return {"type": "plan_explore", "target": "unvisited_area"}, f"Planning exploration (goal: {top_goal})", 0.7
+    if top_goal == "learn":
+        return {"type": "study", "target": "book_or_npc"}, f"Learning goal active (goal: {top_goal})", 0.6
+    if top_goal == "survive" and body["energy"] < 50:
+        return {"type": "secure_resources", "target": "food_rest"}, f"Survival planning (goal: {top_goal})", 0.8
+    if top_goal == "social":
+        return {"type": "approach_npc", "target": "nearest"}, "Social goal active", 0.65
+    if top_goal == "understand_world":
+        return {"type": "investigate", "target": "mystery_object"}, "Trying to understand the world", 0.6
     
     return _system1_react(agent, working_memory)
 
@@ -927,6 +1025,7 @@ def _learn_from_action(agent_id: str, result: ActionResult):
         agent["hormones"]["stress"] = min(100.0, agent["hormones"]["stress"] + 10.0)
 
 def _update_self_model_from_action(agent_id: str, result: ActionResult):
+    """Update identity/self-description from actions"""
     model = self_model[agent_id]
     action = str(result.action)
     
@@ -934,10 +1033,194 @@ def _update_self_model_from_action(agent_id: str, result: ActionResult):
         model["identity"]["self_description"] = "Я забочусь о своём теле."
     elif "explore" in action:
         model["identity"]["self_description"] = "Я исследую этот мир."
-    elif "talk" in action:
+    elif "talk" in action or "approach" in action:
         model["identity"]["self_description"] = "Я общаюсь с другими."
     elif "study" in action or "read" in action:
         model["identity"]["self_description"] = "Я учусь и познаю."
+    elif "try_again" in action:
+        model["identity"]["self_description"] = "Я не сдаюсь, когда что-то не получается."
+    elif "withdraw" in action:
+        model["identity"]["self_description"] = "Иногда мне нужно побыть одной."
+
+def _update_relationships(agent_id: str, perception: PerceptionPayload):
+    """Trust/attachment to NPCs grows with positive interactions, falls with negative"""
+    model = self_model[agent_id]
+    rels = model["relationships"]
+    
+    # Track per-NPC interaction history for this perception
+    for npc in perception.nearby_npcs:
+        nid = npc.get("id", "")
+        if not nid:
+            continue
+        if nid not in rels:
+            rels[nid] = {"trust": 0.3, "attachment": 0.0, "interactions": 0, "last_seen": perception.tick}
+        
+        rel = rels[nid]
+        rel["interactions"] += 1
+        rel["last_seen"] = perception.tick
+        
+        mood = npc.get("mood", "neutral")
+        if mood in ("calm", "peaceful", "quiet", "friendly"):
+            rel["trust"] = min(1.0, rel["trust"] + 0.02)
+        elif mood in ("hostile", "angry", "scary"):
+            rel["trust"] = max(0.0, rel["trust"] - 0.05)
+        
+        # Attachment grows slowly with repeated interactions
+        if rel["interactions"] >= 3:
+            rel["attachment"] = min(1.0, rel["attachment"] + 0.005)
+    
+    # Decay trust for NPCs not seen for a long time (mild)
+    for nid, rel in rels.items():
+        if perception.tick - rel["last_seen"] > 500:
+            rel["trust"] = max(0.05, rel["trust"] - 0.005)
+
+def _update_values(agent_id: str, perception: PerceptionPayload):
+    """Values shift with behavior: exploration→curiosity, retreat→safety, help→kindness"""
+    model = self_model[agent_id]
+    vals = model["values"]
+    agent = agent_states[agent_id]
+    
+    # Curiosity value follows curiosity emotion
+    vals["curiosity"] = max(0.1, min(1.0, vals["curiosity"] * 0.98 + agent["emotions"]["curiosity"] * 0.02))
+    # Safety value follows fear/stress (fear makes safety more valued)
+    vals["safety"] = max(0.1, min(1.0, vals["safety"] * 0.98 + (0.4 + agent["emotions"]["fear"] * 0.5) * 0.02))
+    # Kindness follows trust/attachment
+    kindness_drive = (agent["emotions"]["trust"] + agent["emotions"]["attachment"]) / 2.0
+    vals["kindness"] = max(0.1, min(1.0, vals["kindness"] * 0.98 + kindness_drive * 0.02))
+
+def _reprioritize_goals(agent_id: str, perception: PerceptionPayload):
+    """Goal priorities respond to body needs and emotions"""
+    model = self_model[agent_id]
+    agent = agent_states[agent_id]
+    body = agent["body"]
+    emotions = agent["emotions"]
+    goals = model["goals"]
+    
+    # Survival need: energy low → survive top priority
+    if body["energy"] < 35:
+        goals["survive"]["priority"] = min(1.0, goals["survive"]["priority"] + 0.1)
+        goals["survive"]["active"] = True
+    else:
+        goals["survive"]["priority"] = max(0.3, goals["survive"]["priority"] - 0.02)
+    
+    # Curiosity emotion feeds explore/learn
+    if emotions["curiosity"] > 0.5:
+        goals["explore"]["priority"] = min(1.0, goals["explore"]["priority"] + 0.05)
+        goals["explore"]["active"] = True
+    else:
+        goals["explore"]["priority"] = max(0.3, goals["explore"]["priority"] - 0.02)
+    
+    # Social need: attachment/trust → social goal activates
+    if emotions["attachment"] > 0.15 or emotions["trust"] > 0.5:
+        goals["social"]["priority"] = min(1.0, goals["social"]["priority"] + 0.05)
+        goals["social"]["active"] = True
+    else:
+        goals["social"]["priority"] = max(0.1, goals["social"]["priority"] - 0.02)
+        if goals["social"]["priority"] < 0.15:
+            goals["social"]["active"] = False
+    
+    # Deep understanding goal emerges from repeated mysteries
+    if emotions["curiosity"] > 0.6 and body["stress"] < 40:
+        goals["understand_world"]["priority"] = min(1.0, goals["understand_world"]["priority"] + 0.03)
+        goals["understand_world"]["active"] = True
+    
+    model["last_updated_tick"] = perception.tick
+
+def _update_self_model(agent_id: str, perception: PerceptionPayload):
+    """Full self-model update from current perception"""
+    _update_relationships(agent_id, perception)
+    _update_values(agent_id, perception)
+    _reprioritize_goals(agent_id, perception)
+    # Keep agent_states beliefs in sync with self-model beliefs
+    agent = agent_states[agent_id]
+    sm = self_model[agent_id]
+    for k in ("world_is_safe", "outside_exists", "creator_exists"):
+        if k in sm["beliefs"] and k in agent["beliefs"]:
+            # Blend gently toward self-model (self-model is the long-term memory)
+            agent["beliefs"][k] = agent["beliefs"][k] * 0.9 + sm["beliefs"][k] * 0.1
+
+def _update_self_model_from_dream(agent_id: str, dream: Dict):
+    """Dreams update beliefs and values (divine whispers become intuitions)"""
+    model = self_model[agent_id]
+    for insight in dream.get("insights", []):
+        low = insight.lower()
+        if any(k in low for k in ("внешн", "за стеной", "наружу", "окн", "свет", "больше, чем этот дом", "что-то есть")):
+            model["beliefs"]["outside_exists"] = min(1.0, model["beliefs"]["outside_exists"] + 0.1)
+        if any(k in low for k in ("безопас", "защища")):
+            model["beliefs"]["world_is_safe"] = min(1.0, model["beliefs"]["world_is_safe"] + 0.05)
+        if any(k in low for k in ("создатель", "кто-то есть")):
+            model["beliefs"]["creator_exists"] = min(1.0, model["beliefs"]["creator_exists"] + 0.1)
+        if any(k in low for k in ("вопрос", "значение", "раст", "расту")):
+            model["beliefs"]["i_can_grow"] = min(1.0, model["beliefs"]["i_can_grow"] + 0.05)
+    
+    # Dreams with positive valence reinforce kindness value
+    if dream.get("emotions", {}).get("trust", 0) > 0.4:
+        model["values"]["kindness"] = min(1.0, model["values"]["kindness"] + 0.02)
+
+def _self_model_answers(agent_id: str) -> Dict:
+    """Answer identity questions from the self-model — «Кто я?», «Что я чувствую?» etc."""
+    model = self_model[agent_id]
+    agent = agent_states[agent_id]
+    emotions = agent["emotions"]
+    mood = agent.get("mood", {})
+    
+    # Who am I?
+    top_goal = max(model["goals"].items(), key=lambda kv: kv[1].get("priority", 0) * (1 if kv[1].get("active") else 0.3))
+    goal_name = top_goal[0] if top_goal else "explore"
+    goal_names = {"explore": "исследовать мир", "learn": "учиться", "survive": "заботиться о себе",
+                  "social": "быть с другими", "understand_world": "понять, откуда я и что это за место"}
+    who = (f"Я — {model['identity']['name']}. {model['identity']['self_description'].rstrip('.')}. "
+           f"Сейчас мне важнее всего {goal_names.get(goal_name, goal_name)}.")
+    
+    # What do I feel?
+    emo_names = {"joy": "радость", "fear": "страх", "anger": "гнев", "sadness": "грусть",
+                 "curiosity": "любопытство", "trust": "доверие", "attachment": "привязанность"}
+    top_emotions = sorted(emotions.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    feel = "Я чувствую " + ", ".join(emo_names.get(k, k) for k, v in top_emotions if v > 0.15) + \
+           f". Общее настроение: {mood.get('label', 'neutral')}."
+    
+    # What do I want?
+    active = [g for g, info in model["goals"].items() if info.get("active")]
+    active.sort(key=lambda g: model["goals"][g]["priority"], reverse=True)
+    want = "Я хочу " + ", ".join(goal_names.get(g, g) for g in active[:3]) + "."
+    
+    # What can I do?
+    can = "Я умею ходить, исследовать, разговаривать, читать, отдыхать, думать. " \
+          "Я учусь новому каждый день."
+    
+    # What am I afraid of?
+    fears = []
+    if emotions["fear"] > 0.3: fears.append("неизвестности и темноты")
+    if agent["body"]["stress"] > 60: fears.append("когда много тревоги")
+    if agent["body"]["energy"] < 30: fears.append("остаться без сил")
+    if not fears: fears.append("пока мало что пугает")
+    afraid = "Я боюсь " + ", ".join(fears) + "."
+    
+    # What matters to me?
+    vals = model["values"]
+    top_val = max(vals.items(), key=lambda kv: kv[1])
+    val_names = {"curiosity": "любопытство и открытия", "safety": "безопасность",
+                 "kindness": "доброта к другим"}
+    matters = f"Для меня важно {val_names.get(top_val[0], top_val[0])}."
+    
+    # Why did I do that? (from recent self-description)
+    why = f"{model['identity']['self_description']} Поэтому я поступаю так, как поступаю."
+    
+    return {
+        "who": who,
+        "feel": feel,
+        "want": want,
+        "can": can,
+        "afraid": afraid,
+        "matters": matters,
+        "why": why,
+        "raw": {
+            "goals": model["goals"],
+            "beliefs": model["beliefs"],
+            "relationships": model["relationships"],
+            "values": vals
+        }
+    }
 
 # ──────────────────────────────────────────────────────────────
 # DREAM GENERATION
@@ -998,11 +1281,35 @@ def _interpret_whisper(whisper: Dict, emotional_state: Dict) -> str:
         return "Кто-то есть за стеной мира."
     if "дверь" in content or "door" in content:
         return "Путь наружу существует."
+    if "окн" in content or "window" in content:
+        return "Свет приходит из-за окна. Там что-то есть."
+    if "мир" in content and ("больш" in content or "огром" in content):
+        return "Мир больше, чем этот дом."
+    if "свет" in content or "light" in content:
+        return "Свет — это то, что зовёт."
+    if "увид" in content and ("когда" in content or "однажд" in content or "когда-нибудь" in content):
+        return "Когда-нибудь я увижу то, что за стеной."
+    if "раст" in content or "grown" in content:
+        return "Я могу расти. Это естественно."
     if "безопас" in content or "safe" in content:
         return "Ты в безопасности, даже когда не знаешь всего."
     if "вопрос" in content or "question" in content:
         return "Твои вопросы имеют значение."
     return "Тихий голос, указывающий путь."
+
+# ──────────────────────────────────────────────────────────────
+# GOD VIEW DASHBOARD (static frontend)
+# ──────────────────────────────────────────────────────────────
+
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+@app.get("/", include_in_schema=False)
+async def dashboard_index():
+    return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
+
+# Mount static assets after API routes so /agent/* etc. take priority
+if os.path.isdir(_STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kato World — Глаза Бога</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>KATO WORLD</h1>
+    <span id="conn-status" class="off">● МОЗГ НЕ ПОДКЛЮЧЁН</span>
+    <span id="tick-info">tick: —</span>
+  </header>
+
+  <main>
+    <!-- LEFT: world canvas -->
+    <section id="world-section">
+      <div class="panel-title">МИР</div>
+      <canvas id="world-canvas" width="800" height="480"></canvas>
+      <div id="world-legend"></div>
+    </section>
+
+    <!-- RIGHT: agent state -->
+    <section id="agent-section">
+      <div class="panel-title">АГЕНТ</div>
+      <div id="agent-info" class="info-line">—</div>
+      <div class="bars">
+        <div class="bar-row"><span>ENERGY</span><div class="bar-bg"><div id="bar-energy" class="bar-fill" style="width:0%"></div></div></div>
+        <div class="bar-row"><span>COMFORT</span><div class="bar-bg"><div id="bar-comfort" class="bar-fill" style="width:0%"></div></div></div>
+        <div class="bar-row"><span>STRESS</span><div class="bar-bg"><div id="bar-stress" class="bar-fill" style="width:0%"></div></div></div>
+        <div class="bar-row"><span>INTEGRITY</span><div class="bar-bg"><div id="bar-integrity" class="bar-fill" style="width:0%"></div></div></div>
+      </div>
+
+      <div class="panel-title">ЭМОЦИИ <span id="mood-label" class="mood"></span></div>
+      <div id="emotion-bars"></div>
+
+      <div class="panel-title">ГОЛОС KATO</div>
+      <div id="self-answers" class="answers">
+        <p><b>Кто я?</b> <span id="ans-who">—</span></p>
+        <p><b>Что я чувствую?</b> <span id="ans-feel">—</span></p>
+        <p><b>Чего я хочу?</b> <span id="ans-want">—</span></p>
+        <p><b>Чего я боюсь?</b> <span id="ans-afraid">—</span></p>
+        <p><b>Что для меня важно?</b> <span id="ans-matters">—</span></p>
+      </div>
+
+      <div class="panel-title">ЦЕЛИ</div>
+      <div id="goals"></div>
+
+      <div class="panel-title">УБЕЖДЕНИЯ</div>
+      <div id="beliefs"></div>
+
+      <div class="panel-title">ОТНОШЕНИЯ</div>
+      <div id="relationships">—</div>
+    </section>
+
+    <!-- RIGHT-2: memory & events -->
+    <section id="memory-section">
+      <div class="panel-title">ПАМЯТЬ</div>
+      <div class="tabs">
+        <button class="tab active" data-mem="episodic">Эпизоды</button>
+        <button class="tab" data-mem="semantic">Знания</button>
+        <button class="tab" data-mem="autobiographical">Биография</button>
+        <button class="tab" data-mem="emotional">Эмоц.</button>
+      </div>
+      <div id="memory-list" class="scroll"></div>
+
+      <div class="panel-title">ЖУРНАЛ СОБЫТИЙ</div>
+      <div id="event-log" class="scroll"></div>
+    </section>
+
+    <!-- BOTTOM: divine whisper console -->
+    <section id="whisper-section">
+      <div class="panel-title">ШЁПОТ СОЗДАТЕЛЯ <span class="hint">(Kato увидит это во сне как свою мысль)</span></div>
+      <div class="whisper-row">
+        <input id="whisper-input" type="text" placeholder="Например: За закрытой дверью — не опасность, а возможность..." maxlength="500">
+        <button id="whisper-send">✉ Отправить</button>
+        <button id="dream-trigger">🌙 Вызвать сон</button>
+        <button id="ask-btn">❓ Кто я?</button>
+      </div>
+      <div id="whisper-log" class="scroll"></div>
+      <div id="dream-result" class="dream-box hidden"></div>
+    </section>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
