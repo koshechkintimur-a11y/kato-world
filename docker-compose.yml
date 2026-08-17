@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  brain:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./python:/app
+      - brain_data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+  godot:
+    build:
+      context: ./godot
+      dockerfile: Dockerfile
+    ports:
+      - "6080:6080"  # noVNC web access
+      - "5900:5900"  # VNC
+    volumes:
+      - ./godot:/project
+    environment:
+      - DISPLAY=:0
+    depends_on:
+      - brain
+    profiles:
+      - gui
+
+volumes:
+  brain_data:

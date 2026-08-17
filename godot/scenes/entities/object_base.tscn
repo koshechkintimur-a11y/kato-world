@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3 uid://dj4h2k3j4k5l8]
+
+[ext_resource type="Script" path="res://scripts/entities/object_base.gd" id="1"]
+
+[node name="ObjectBase" type="Area2D"]
+script = ExtResource("1")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource(" 1 ")  # Will be set in code
+position = Vector2(0, -8)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = RectangleShape2D {
+    x = 16
+    y = 16
+}

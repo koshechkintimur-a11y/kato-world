@@ -1,0 +1,29 @@
+[gd_resource type="TileSet" load_steps=2 format=3 uid://dj4h2k3j4k5l9]
+
+[ext_resource type="Texture2D" path="res://assets/tilesets/tilesheet.png" id="1"]
+
+[resource]
+tile_size = Vector2i(16, 16)
+textures = {
+    0: ExtResource("1")
+}
+tile_data = {
+    0: {
+        "texture_id": 0,
+        "atlas_coords": Vector2i(0, 0),
+        "name": "floor",
+        "collision_layer": 0
+    },
+    1: {
+        "texture_id": 0,
+        "atlas_coords": Vector2i(1, 0),
+        "name": "wall",
+        "collision_layer": 1
+    },
+    2: {
+        "texture_id": 0,
+        "atlas_coords": Vector2i(2, 0),
+        "name": "grass",
+        "collision_layer": 0
+    }
+}

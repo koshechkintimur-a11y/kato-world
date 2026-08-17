@@ -1,0 +1,504 @@
+extends Node2D
+
+# Main scene - entry point for the world simulation
+@tool
+
+var _tick_timer: Timer
+var _world_root: Node2D
+var _ui_root: CanvasLayer
+
+func _ready():
+    print("=== Kato World Main Scene ===")
+    
+    # Initialize autoloads are already ready
+    _setup_world()
+    _setup_tick_loop()
+    _setup_ui()
+    _load_saved_state()
+    
+    # Connect memory system signals
+    var mem_sys = get_tree().root.get_node("WorldRoot/MemorySystem", true)
+    if mem_sys:
+        mem_sys.memory_recalled.connect(_on_memory_recalled)
+    
+    # Start the simulation
+    _tick_timer.start()
+    GlobalState.resume()
+    
+    print("World simulation started")
+
+func _setup_world():
+    _world_root = Node2D.new()
+    _world_root.name = "WorldRoot"
+    add_child(_world_root)
+    
+    # Create tilemap for the house
+    _create_tilemap()
+    
+    # Spawn objects
+    _spawn_objects()
+    
+    # Spawn NPCs
+    _spawn_npcs()
+    
+    # Spawn agent
+    _spawn_agent()
+    
+    # Add MemorySystem as child
+    var mem_sys = preload("res://scenes/components/memory_system.tscn").instantiate()
+    mem_sys.name = "MemorySystem"
+    _world_root.add_child(mem_sys)
+
+func _create_tilemap():
+    var tilemap = TileMap.new()
+    tilemap.name = "TileMap"
+    tilemap.tile_set = preload("res://assets/tilesets/house_tileset.tres")
+    _world_root.add_child(tilemap)
+    
+    # Simple house layout - floor
+    for x in range(GlobalState.WORLD_WIDTH):
+        for y in range(GlobalState.WORLD_HEIGHT):
+            # Floor tiles
+            if (x >= 2 and x <= 15 and y >= 2 and y <= 15):
+                tilemap.set_cell(0, Vector2i(x, y), 0, Vector2i(0, 0))  # floor tile
+            # Walls
+            if (x == 2 or x == 15) and (y >= 2 and y <= 15):
+                tilemap.set_cell(1, Vector2i(x, y), 0, Vector2i(1, 0))  # wall tile
+            if (y == 2 or y == 15) and (x >= 2 and x <= 15):
+                tilemap.set_cell(1, Vector2i(x, y), 0, Vector2i(1, 0))
+            # Door opening
+            if x == 12 and y == 15:
+                tilemap.erase_cell(1, Vector2i(x, y))
+    
+    # Garden area outside
+    for x in range(GlobalState.WORLD_WIDTH):
+        for y in range(16, GlobalState.WORLD_HEIGHT):
+            tilemap.set_cell(0, Vector2i(x, y), 0, Vector2i(2, 0))  # grass tile
+
+func _spawn_objects():
+    var objects_parent = Node2D.new()
+    objects_parent.name = "Objects"
+    _world_root.add_child(objects_parent)
+    
+    for obj_data in WorldState.world_state.objects:
+        var obj_scene = _get_object_scene(obj_data.type)
+        if obj_scene:
+            var obj_instance = obj_scene.instantiate()
+            obj_instance.name = obj_data.id
+            obj_instance.global_position = GlobalState.tile_to_world(Vector2i(obj_data.position[0], obj_data.position[1]))
+            obj_instance.set_meta("object_data", obj_data)
+            objects_parent.add_child(obj_instance)
+
+func _spawn_npcs():
+    var npcs_parent = Node2D.new()
+    npcs_parent.name = "NPCs"
+    _world_root.add_child(npcs_parent)
+    
+    for npc_data in WorldState.world_state.npcs:
+        var npc_scene = preload("res://scenes/entities/npc.tscn")
+        var npc_instance = npc_scene.instantiate()
+        npc_instance.name = npc_data.id
+        npc_instance.global_position = GlobalState.tile_to_world(Vector2i(npc_data.position[0], npc_data.position[1]))
+        npc_instance.set_meta("npc_data", npc_data)
+        npcs_parent.add_child(npc_instance)
+
+func _spawn_agent():
+    var agent_scene = preload("res://scenes/entities/agent.tscn")
+    var agent_instance = agent_scene.instantiate()
+    agent_instance.name = "Kato"
+    agent_instance.global_position = GlobalState.tile_to_world(Vector2i(12, 8))
+    _world_root.add_child(agent_instance)
+    
+    # Connect agent signals
+    agent_instance.position_changed.connect(_on_agent_position_changed)
+    agent_instance.action_executed.connect(_on_agent_action_executed)
+
+func _get_object_scene(obj_type: String) -> PackedScene:
+    match obj_type:
+        "furniture": return preload("res://scenes/entities/object_furniture.tscn")
+        "device": return preload("res://scenes/entities/object_device.tscn")
+        "container": return preload("res://scenes/entities/object_container.tscn")
+        "tool": return preload("res://scenes/entities/object_tool.tscn")
+        "portal": return preload("res://scenes/entities/object_portal.tscn")
+        "living": return preload("res://scenes/entities/object_living.tscn")
+        _: return preload("res://scenes/entities/object_base.tscn")
+
+func _setup_tick_loop():
+    _tick_timer = Timer.new()
+    _tick_timer.name = "TickTimer"
+    _tick_timer.wait_time = 1.0 / GlobalState.TICK_RATE
+    _tick_timer.one_shot = false
+    _tick_timer.autostart = false
+    _tick_timer.timeout.connect(_on_tick)
+    add_child(_tick_timer)
+
+func _setup_ui():
+    _ui_root = CanvasLayer.new()
+    _ui_root.name = "UIRoot"
+    _ui_root.layer = 10
+    add_child(_ui_root)
+    
+    # Status panel
+    var status_panel = Control.new()
+    status_panel.name = "StatusPanel"
+    status_panel.anchors_preset = Control.PRESET_TOP_LEFT
+    status_panel.offset_left = 10
+    status_panel.offset_top = 10
+    status_panel.custom_minimum_size = Vector2(200, 150)
+    _ui_root.add_child(status_panel)
+    
+    var energy_label = Label.new()
+    energy_label.name = "EnergyLabel"
+    energy_label.text = "Energy: 100%"
+    status_panel.add_child(energy_label)
+    
+    var comfort_label = Label.new()
+    comfort_label.name = "ComfortLabel"
+    comfort_label.text = "Comfort: 100%"
+    comfort_label.position = Vector2(0, 25)
+    status_panel.add_child(comfort_label)
+    
+    var stress_label = Label.new()
+    stress_label.name = "StressLabel"
+    stress_label.text = "Stress: 0%"
+    stress_label.position = Vector2(0, 50)
+    status_panel.add_child(stress_label)
+    
+    var tick_label = Label.new()
+    tick_label.name = "TickLabel"
+    tick_label.text = "Tick: 0"
+    tick_label.position = Vector2(0, 75)
+    status_panel.add_child(tick_label)
+    
+    var time_label = Label.new()
+    time_label.name = "TimeLabel"
+    time_label.text = "Time: Dawn"
+    time_label.position = Vector2(0, 100)
+    status_panel.add_child(time_label)
+    
+    var connection_label = Label.new()
+    connection_label.name = "ConnectionLabel"
+    connection_label.text = "Brain: Disconnected"
+    connection_label.position = Vector2(0, 125)
+    connection_label.add_theme_color_override("font_color", Color.RED)
+    status_panel.add_child(connection_label)
+    
+    # Memory Panel
+    _setup_memory_ui()
+    
+    # Emotion Panel
+    _setup_emotion_ui()
+    
+    # Connect brain client signals for UI updates
+    BrainClient.brain_connection_changed.connect(_on_brain_connection_changed)
+    BrainClient.emotion_state_received.connect(_on_emotion_state_received)
+    BrainClient.action_received.connect(_on_brain_action_received)
+
+func _on_tick():
+    var delta = 1.0 / GlobalState.TICK_RATE
+    GlobalState.advance_tick(delta)
+    _update_ui()
+
+func _update_ui():
+    var agent_state = WorldState.get_agent_state()
+    var status_panel = _ui_root.get_node("StatusPanel")
+    
+    status_panel.get_node("EnergyLabel").text = "Energy: %.0f%%" % agent_state.energy
+    status_panel.get_node("ComfortLabel").text = "Comfort: %.0f%%" % agent_state.comfort
+    status_panel.get_node("StressLabel").text = "Stress: %.0f%%" % agent_state.stress
+    status_panel.get_node("TickLabel").text = "Tick: %d" % GlobalState.current_tick
+    
+    var time_names = ["Night", "Dawn", "Morning", "Noon", "Afternoon", "Evening", "Dusk", "Night"]
+    var time_index = int(GlobalState.time_of_day * 7)
+    status_panel.get_node("TimeLabel").text = "Time: %s" % time_names[clamp(time_index, 0, 7)]
+
+func _on_agent_position_changed(new_pos: Vector2i):
+    WorldState.update_agent_position(new_pos)
+
+func _on_agent_action_executed(action: String, params: Dictionary, result: Dictionary):
+    WorldState.add_event({
+        "type": "action",
+        "action": action,
+        "params": params,
+        "result": result,
+        "agent_position": WorldState.get_agent_state().position
+    })
+    
+    # Send result to brain
+    BrainClient.send_action_result(action, params, result, result.success if result.has("success") else true)
+
+func _on_brain_connection_changed(connected: bool):
+    var label = _ui_root.get_node("StatusPanel/ConnectionLabel")
+    if connected:
+        label.text = "Brain: Connected"
+        label.add_theme_color_override("font_color", Color.GREEN)
+    else:
+        label.text = "Brain: Disconnected"
+        label.add_theme_color_override("font_color", Color.RED)
+
+func _load_saved_state():
+    WorldState.load_from_file()
+    # Restore agent position from loaded state
+    var agent = _world_root.get_node("Kato")
+    if agent:
+        var pos = WorldState.get_agent_state().position
+        agent.global_position = GlobalState.tile_to_world(Vector2i(pos[0], pos[1]))
+
+func _on_ready():
+    # Auto-save every 100 ticks
+    if GlobalState.current_tick % 100 == 0 and GlobalState.current_tick > 0:
+        WorldState.save_to_file()
+
+func _notification(what):
+    if what == NOTIFICATION_WM_CLOSE_REQUEST:
+        WorldState.save_to_file()
+        get_tree().quit()
+
+# Memory UI
+func _setup_memory_ui():
+    var mem_panel = Control.new()
+    mem_panel.name = "MemoryPanel"
+    mem_panel.anchors_preset = Control.PRESET_TOP_RIGHT
+    mem_panel.offset_right = -10
+    mem_panel.offset_top = 10
+    mem_panel.custom_minimum_size = Vector2(300, 400)
+    _ui_root.add_child(mem_panel)
+    
+    # Title
+    var title = Label.new()
+    title.name = "MemoryTitle"
+    title.text = "🧠 MEMORY SYSTEM"
+    title.add_theme_color_override("font_color", Color.YELLOW)
+    title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    mem_panel.add_child(title)
+    
+    # Memory type tabs
+    var tab_bar = TabBar.new()
+    tab_bar.name = "MemoryTabs"
+    tab_bar.add_tab("Episodic")
+    tab_bar.add_tab("Semantic")
+    tab_bar.add_tab("Autobiographical")
+    tab_bar.add_tab("Emotional")
+    tab_bar.add_tab("Working")
+    tab_bar.tab_changed.connect(_on_memory_tab_changed)
+    tab_bar.position = Vector2(0, 30)
+    tab_bar.custom_minimum_size = Vector2(300, 30)
+    mem_panel.add_child(tab_bar)
+    
+    # Cue input
+    var cue_input = LineEdit.new()
+    cue_input.name = "CueInput"
+    cue_input.placeholder_text = "Search cue (e.g., 'book', 'failure', 'curiosity')..."
+    cue_input.position = Vector2(0, 65)
+    cue_input.custom_minimum_size = Vector2(250, 25)
+    mem_panel.add_child(cue_input)
+    
+    var search_btn = Button.new()
+    search_btn.name = "SearchBtn"
+    search_btn.text = "Search"
+    search_btn.position = Vector2(255, 65)
+    search_btn.custom_minimum_size = Vector2(45, 25)
+    search_btn.pressed.connect(_on_memory_search)
+    mem_panel.add_child(search_btn)
+    
+    # Memory list
+    var scroll = ScrollContainer.new()
+    scroll.name = "MemoryScroll"
+    scroll.position = Vector2(0, 95)
+    scroll.custom_minimum_size = Vector2(300, 280)
+    mem_panel.add_child(scroll)
+    
+    var mem_list = VBoxContainer.new()
+    mem_list.name = "MemoryList"
+    scroll.add_child(mem_list)
+    
+    # Summary labels
+    var summary = Label.new()
+    summary.name = "MemorySummary"
+    summary.text = "Episodic: 0 | Semantic: 0 | Auto: 0 | Emotional: 0 | Working: 0"
+    summary.position = Vector2(0, 380)
+    summary.autowrap_mode = TextServer.AUTOWRAP_WORD
+    mem_panel.add_child(summary)
+
+func _on_memory_tab_changed(tab_idx: int):
+    _refresh_memory_display()
+
+func _on_memory_search():
+    var cue_input = _ui_root.get_node("MemoryPanel/CueInput")
+    _refresh_memory_display(cue_input.text)
+
+func _refresh_memory_display(cue: String = ""):
+    var mem_sys = get_tree().root.get_node("WorldRoot/MemorySystem", true)
+    if not mem_sys:
+        return
+    
+    var tab_bar = _ui_root.get_node("MemoryPanel/MemoryTabs")
+    var mem_type = ["episodic", "semantic", "autobiographical", "emotional", "working"][tab_bar.current_tab]
+    
+    # Query memory
+    mem_sys.query_memory(mem_type, cue, 20, 0.0)
+    
+    # Update summary
+    var summary = _ui_root.get_node("MemoryPanel/MemorySummary")
+    var counts = mem_sys.get_memory_summary()
+    summary.text = "Episodic: %d | Semantic: %d | Auto: %d | Emotional: %d | Working: %d" % [
+        counts.get("episodic", 0), counts.get("semantic", 0),
+        counts.get("autobiographical", 0), counts.get("emotional", 0),
+        counts.get("working", 0)
+    ]
+
+func _on_memory_recalled(memories: Array, query_type: String):
+    var mem_list = _ui_root.get_node("MemoryPanel/MemoryScroll/MemoryList")
+    
+    # Clear existing
+    for child in mem_list.get_children():
+        child.queue_free()
+    
+    if memories.size() == 0:
+        var empty = Label.new()
+        empty.text = "(no memories)"
+        empty.add_theme_color_override("font_color", Color.GRAY)
+        mem_list.add_child(empty)
+        return
+    
+    for mem in memories:
+        var item = HBoxContainer.new()
+        item.custom_minimum_size = Vector2(280, 60)
+        
+        # Importance indicator
+        var imp = mem.get("importance", mem.get("confidence", 0))
+        var imp_bar = ProgressBar.new()
+        imp_bar.min_value = 0
+        imp_bar.max_value = 1
+        imp_bar.value = imp
+        imp_bar.custom_minimum_size = Vector2(80, 15)
+        item.add_child(imp_bar)
+        
+        # Memory text
+        var text = Label.new()
+        var what = mem.get("what", mem.get("knowledge", mem.get("summary", "")))
+        var where = mem.get("where", [])
+        var time = mem.get("time", mem.get("start_tick", mem.get("formed_at", 0)))
+        text.text = "[%s] %s" % [time, what]
+        if where.size() == 2:
+            text.text += " @(%d,%d)" % [where[0], where[1]]
+        text.autowrap_mode = TextServer.AUTOWRAP_WORD
+        text.custom_minimum_size = Vector2(200, 50)
+        item.add_child(text)
+        
+        # Emotion/valence indicator
+        var valence = mem.get("valence", 0)
+        var emo_label = Label.new()
+        var dom = mem.get("dominant_emotion", "")
+        if valence != 0:
+            emo_label.text = "%s %.1f" % [dom, valence]
+            if valence > 0:
+                emo_label.add_theme_color_override("font_color", Color.GREEN)
+            else:
+                emo_label.add_theme_color_override("font_color", Color.RED)
+        else:
+            emo_label.text = dom
+        emo_label.custom_minimum_size = Vector2(80, 20)
+        item.add_child(emo_label)
+        
+        mem_list.add_child(item)
+
+# Emotion UI
+func _setup_emotion_ui():
+    var emo_panel = Control.new()
+    emo_panel.name = "EmotionPanel"
+    emo_panel.anchors_preset = Control.PRESET_BOTTOM_LEFT
+    emo_panel.offset_left = 10
+    emo_panel.offset_bottom = -10
+    emo_panel.custom_minimum_size = Vector2(300, 260)
+    _ui_root.add_child(emo_panel)
+    
+    var title = Label.new()
+    title.name = "EmotionTitle"
+    title.text = "🧠 EMOTIONS"
+    title.add_theme_color_override("font_color", Color(0.3, 0.9, 1.0))
+    emo_panel.add_child(title)
+    
+    var mood_label = Label.new()
+    mood_label.name = "MoodLabel"
+    mood_label.text = "Mood: —"
+    mood_label.position = Vector2(90, 0)
+    mood_label.add_theme_color_override("font_color", Color.WHITE)
+    emo_panel.add_child(mood_label)
+    
+    var action_label = Label.new()
+    action_label.name = "ActionLabel"
+    action_label.text = "Brain wants: —"
+    action_label.position = Vector2(0, 20)
+    action_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+    action_label.custom_minimum_size = Vector2(290, 30)
+    emo_panel.add_child(action_label)
+    
+    # 7 emotion bars
+    var emo_names = {
+        "joy": {"label": "Joy", "color": Color(1.0, 0.85, 0.2)},
+        "fear": {"label": "Fear", "color": Color(0.9, 0.3, 0.3)},
+        "anger": {"label": "Anger", "color": Color(1.0, 0.4, 0.1)},
+        "sadness": {"label": "Sadness", "color": Color(0.4, 0.5, 0.9)},
+        "curiosity": {"label": "Curiosity", "color": Color(0.3, 0.9, 0.5)},
+        "trust": {"label": "Trust", "color": Color(0.4, 0.8, 0.4)},
+        "attachment": {"label": "Attachment", "color": Color(0.9, 0.6, 0.9)}
+    }
+    
+    var y = 55
+    for key in emo_names:
+        var info = emo_names[key]
+        var lbl = Label.new()
+        lbl.name = "Lbl_" + key
+        lbl.text = info.label
+        lbl.position = Vector2(0, y)
+        lbl.custom_minimum_size = Vector2(80, 18)
+        lbl.add_theme_color_override("font_color", info.color)
+        emo_panel.add_child(lbl)
+        
+        var bar = ProgressBar.new()
+        bar.name = "Bar_" + key
+        bar.min_value = 0
+        bar.max_value = 1
+        bar.value = 0
+        bar.show_percentage = false
+        bar.position = Vector2(85, y)
+        bar.custom_minimum_size = Vector2(200, 16)
+        bar.add_theme_stylebox_override("fill", _make_bar_style(info.color))
+        emo_panel.add_child(bar)
+        
+        y += 25
+
+func _make_bar_style(color: Color) -> StyleBoxFlat:
+    var sb = StyleBoxFlat.new()
+    sb.bg_color = color
+    sb.set_corner_radius_all(3)
+    return sb
+
+func _on_emotion_state_received(emotions: Dictionary, mood: Dictionary):
+    var emo_panel = _ui_root.get_node("EmotionPanel")
+    
+    for key in emotions:
+        var bar = emo_panel.get_node_or_null("Bar_" + key)
+        if bar:
+            bar.value = emotions[key]
+    
+    if mood.has("label"):
+        var mood_label = emo_panel.get_node("MoodLabel")
+        mood_label.text = "Mood: " + mood.label
+        var mood_colors = {
+            "excited": Color(1.0, 0.9, 0.3),
+            "content": Color(0.4, 0.9, 0.4),
+            "distressed": Color(0.9, 0.2, 0.2),
+            "anxious": Color(0.9, 0.5, 0.2),
+            "melancholic": Color(0.5, 0.5, 0.9),
+            "alert": Color(0.9, 0.8, 0.3),
+            "calm": Color(0.5, 0.8, 0.9),
+            "neutral": Color(0.7, 0.7, 0.7)
+        }
+        mood_label.add_theme_color_override("font_color", mood_colors.get(mood.label, Color.WHITE))
+
+func _on_brain_action_received(action: Dictionary):
+    var action_label = _ui_root.get_node("EmotionPanel/ActionLabel")
+    if action.has("type"):
+        action_label.text = "Brain wants: %s" % action.type
