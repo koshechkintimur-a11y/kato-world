@@ -981,5 +981,83 @@ $('rev-fear').addEventListener('click', () => revelationRespond('Я боюсь')
 $('rev-send').addEventListener('click', revelationAsk);
 $('rev-input').addEventListener('keydown', e => { if (e.key === 'Enter') revelationAsk(); });
 
-setInterval(poll, 1500);
-poll();
+// ── PORTAL CHAT ───────────────────────────────────────────────────
+let chatPollTimer = null;
+
+async function loadChat() {
+  try {
+    const conv = await api(`/agent/${AGENT}/portal/conversation`);
+    renderChat(conv.conversation || []);
+  } catch (e) {
+    console.warn('Chat load failed:', e);
+  }
+}
+
+function renderChat(messages) {
+  const container = $('chat-messages');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const m of messages) {
+    const isKato = m.role === 'kato';
+    const d = document.createElement('div');
+    d.className = 'chat-msg ' + (isKato ? 'kato' : 'creator');
+    const who = isKato ? (LANG === 'ru' ? '💭 Kato' : '💭 Kato') : (LANG === 'ru' ? '🧑 Вы' : '🧑 You');
+    d.innerHTML = `<span class="chat-who">${who}</span><span class="chat-text">${m.text || ''}</span>`;
+    container.appendChild(d);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+async function sendChat() {
+  const input = $('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  const btn = $('chat-send');
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    await apiPost(`/agent/${AGENT}/portal/message`, { text });
+    input.value = '';
+    await loadChat();
+  } catch (e) {
+    console.error('Chat send failed:', e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = LANG === 'ru' ? '✉ Отправить' : '✉ Send';
+  }
+}
+
+function startChatPoll() {
+  if (chatPollTimer) clearInterval(chatPollTimer);
+  chatPollTimer = setInterval(loadChat, 3000);
+  loadChat();
+}
+
+function stopChatPoll() {
+  if (chatPollTimer) clearInterval(chatPollTimer);
+  chatPollTimer = null;
+}
+
+// Add to INIT
+$('chat-send').addEventListener('click', sendChat);
+$('chat-input').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+// Load chat when portal becomes active (add to loadPortal or poll)
+const originalLoadPortal = loadPortal;
+loadPortal = async function() {
+  await originalLoadPortal();
+  const portal = await api(`/agent/${AGENT}/portal/status`).catch(() => null);
+  if (portal && portal.state === 'active') {
+    startChatPoll();
+  } else {
+    stopChatPoll();
+  }
+};
+
+// Start chat poll initially if portal already active
+setTimeout(() => {
+  api(`/agent/${AGENT}/portal/status`).then(p => {
+    if (p && p.state === 'active') startChatPoll();
+  }).catch(() => {});
+}, 1000);

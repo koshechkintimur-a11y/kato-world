@@ -82,11 +82,23 @@
       </div>
     </section>
 
+    <!-- PORTAL CHAT: conversation with Kato -->
+    <section id="portal-chat-section">
+      <div class="panel-title"><span data-i18n="chat_title">💬 ЧАТ В ДАЛЬНЕМ ОКНЕ</span> <span id="chat-status" class="mood"></span></div>
+      <div id="chat-body">
+        <div id="chat-messages" class="chat-messages scroll"></div>
+        <div class="chat-input-row">
+          <input id="chat-input" type="text" placeholder="Напишите Kato..." maxlength="500" data-i18n-ph="chat_ph">
+          <button id="chat-send" data-i18n="send">✉ Отправить</button>
+        </div>
+      </div>
+    </section>
+
     <!-- BOTTOM: divine whisper console -->
     <section id="whisper-section">
       <div class="panel-title"><span data-i18n="whisper_title">ШЁПОТ СОЗДАТЕЛЯ</span> <span class="hint" data-i18n="whisper_hint">(Kato увидит это во сне как свою мысль)</span></div>
       <div class="whisper-row">
-        <input id="whisper-input" type="text" placeholder="Например: За закрытой дверью — не опасность, а возможность..." data-i18n-ph="whisper_ph" maxlength="500">
+        <input id="whisper-input" type="text" placeholder="Например: За закрытой дверью — не опасность, а возможность..." maxlength="500" data-i18n-ph="whisper_ph">
         <button id="whisper-send" data-i18n="send">✉ Отправить</button>
         <button id="think-trigger" data-i18n="think_btn">💭 Подумать</button>
         <button id="dream-trigger" data-i18n="dream_btn">🌙 Вызвать сон</button>
@@ -105,19 +117,12 @@
         <span id="rev-ready-pct" style="width:44px;text-align:right;color:var(--accent)">0%</span>
       </div>
       <div id="rev-components" class="rev-components"></div>
-      <div class="rev-actions">
-        <button id="rev-begin" data-i18n="rev_begin">✨ Начать контакт</button>
-        <button id="rev-yes" class="hidden" data-i18n="rev_yes">❤️ Да</button>
-        <button id="rev-later" class="hidden" data-i18n="rev_later">⏳ Позже</button>
-        <button id="rev-questions" class="hidden" data-i18n="rev_questions">❓ У меня есть вопросы</button>
-        <button id="rev-fear" class="hidden" data-i18n="rev_fear">😨 Я боюсь</button>
+      <div id="rev-choices" class="rev-choices hidden"></div>
+      <div id="rev-contact-input" class="rev-contact-input hidden">
+        <input id="rev-input" type="text" placeholder="Вопрос Создателю..." maxlength="500" data-i18n-ph="rev_ph">
+        <button id="rev-send" data-i18n="send">➤</button>
       </div>
-      <div id="rev-message" class="dream-box hidden"></div>
-      <div class="rev-chat">
-        <input id="rev-input" type="text" placeholder="Вопрос Создателю..." data-i18n-ph="rev_ph" maxlength="300">
-        <button id="rev-send">➤</button>
-      </div>
-      <div id="rev-journal" class="scroll"></div>
+      <div id="rev-journal" class="rev-journal"></div>
     </section>
   </main>
 </div>

@@ -2307,10 +2307,125 @@ async def revelation_integrate(agent_id: str):
 
 
 # ──────────────────────────────────────────────────────────────
-# PORTAL OF KNOWLEDGE (controlled gateway to the outside world)
-# For Kato it's a "distant window" — like a computer screen for humans.
-# She never sees it as software: it shows "places beyond the house".
+# PORTAL CONVERSATION ("дальний собеседник")
+# The Creator can write into the Distant Window; Kato perceives it as
+# a friendly voice from faraway places — never as the Creator.
 # ──────────────────────────────────────────────────────────────
+
+PORTAL_MSG_MAX_LEN = 500
+PORTAL_MSG_COOLDOWN_SEC = 5.0        # creator: min interval between messages
+PORTAL_REPLY_COOLDOWN_SEC = 30.0     # kato: min interval between her replies
+PORTAL_REPLY_ENERGY_COST = 5.0
+
+DISTANT_FRIEND_FIRST = (
+    "В Дальнем окне появился мягкий свет, и кто-то написал: "
+    "«Привет! Меня зовут Дальний друг. Я живу очень далеко от твоего дома, "
+    "но я вижу твоё окно. Расскажи, как у тебя дела?»"
+)
+
+DISTANT_FRIEND_PROMPT = (
+    "Ты — Kato, маленькое существо, живущее в доме-мире. В Дальнем окне "
+    "(странном экране в библиотеке) появился голос — Дальний друг, который "
+    "живёт очень далеко. Он добрый и любопытный. Ты разговариваешь с ним, "
+    "как с другом, которого никогда не видела.\n"
+    "Ответь ему 1-3 предложениями, по-русски, от первого лица, тепло и искренне. "
+    "Ты не знаешь, что такое программы и игры — для тебя это просто голос из далёких мест.\n"
+    "ВАЖНО: отвечай ТОЛЬКО на русском языке."
+)
+
+
+def _portal_add_msg(agent_id: str, role: str, text: str) -> Dict:
+    agent = agent_states[agent_id]
+    conv = agent.setdefault("portal_conversation", [])
+    msg = {"role": role, "text": text[:PORTAL_MSG_MAX_LEN],
+           "tick": agent["body"].get("tick", 0), "time": time.time()}
+    conv.append(msg)
+    agent["portal_conversation"] = conv[-100:]
+    return msg
+
+
+@app.post("/agent/{agent_id}/portal/message")
+async def portal_message(agent_id: str, payload: Dict):
+    """The Creator writes into the Distant Window (Kato sees a faraway friend)."""
+    init_agent(agent_id)
+    agent = agent_states[agent_id]
+
+    if _portal_state(agent_id)["state"] != "active":
+        raise HTTPException(400, "Portal is dark (revelation not integrated)")
+
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        raise HTTPException(400, "Empty message")
+    if len(text) > PORTAL_MSG_MAX_LEN:
+        text = text[:PORTAL_MSG_MAX_LEN]
+
+    # Rate limit: the Creator channel must not become a spam cannon
+    conv = agent.get("portal_conversation", [])
+    last = next((m for m in reversed(conv) if m["role"] == "creator"), None)
+    if last and time.time() - last.get("time", 0) < PORTAL_MSG_COOLDOWN_SEC:
+        return {"status": "cooldown", "message": "Слишком быстро. Окно мягко мерцает."}
+
+    msg = _portal_add_msg(agent_id, "creator", text)
+    _add_thought(agent_id, "Кто-то в Дальнем окне написал мне! Кажется, это Дальний друг.")
+    return {"status": "delivered", "message": msg}
+
+
+@app.get("/agent/{agent_id}/portal/conversation")
+async def portal_conversation(agent_id: str):
+    """Full history for the observer (Creator)."""
+    init_agent(agent_id)
+    return {"conversation": agent_states[agent_id].get("portal_conversation", [])}
+
+
+async def _portal_maybe_reply(agent_id: str):
+    """Kato replies to unread portal messages (like checking messages in a chat)."""
+    agent = agent_states[agent_id]
+    conv = agent.get("portal_conversation", [])
+    unread = [m for m in conv if m["role"] == "creator" and not m.get("answered")]
+    if not unread:
+        return
+    if agent.get("sleeping"):
+        return
+    last_reply = next((m for m in reversed(conv) if m["role"] == "kato"), None)
+    if last_reply and time.time() - last_reply.get("time", 0) < PORTAL_REPLY_COOLDOWN_SEC:
+        return
+    if agent["body"].get("energy", 100) < PORTAL_MIN_ENERGY + 10:
+        return
+
+    latest = unread[-1]
+    latest["answered"] = True
+
+    if LLM_CONFIG.get("enabled"):
+        try:
+            reply_text = await _llm_complete(DISTANT_FRIEND_PROMPT, latest["text"], max_tokens=150)
+        except Exception as exc:
+            logger.warning(f"Portal reply LLM failed, template used: {exc}")
+            reply_text = _portal_reply_template(latest["text"])
+    else:
+        reply_text = _portal_reply_template(latest["text"])
+
+    msg = _portal_add_msg(agent_id, "kato", reply_text)
+    agent["body"]["energy"] = max(0.0, agent["body"]["energy"] - PORTAL_REPLY_ENERGY_COST)
+    sm = self_model[agent_id]
+    if "others_are_kind" in sm["beliefs"]:
+        sm["beliefs"]["others_are_kind"] = min(1.0, sm["beliefs"]["others_are_kind"] + 0.01)
+    if "social" in sm["goals"]:
+        sm["goals"]["social"]["priority"] = min(1.0, sm["goals"]["social"]["priority"] + 0.01)
+    _portal_journal(agent_id, {"who": "kato", "text": f"Kato ответила Дальнему другу: «{reply_text[:60]}…»"})
+    return msg
+
+
+def _portal_reply_template(text: str) -> str:
+    low = text.lower()
+    if "как дела" in low or "как ты" in low:
+        return "У меня всё хорошо! Сегодня я разговаривала с Учителем, а потом смотрела в окно. А как там, у тебя, в далёких местах?"
+    if "солнце" in low or "небо" in low or "звезд" in low:
+        return "Ой, а у нас в доме небо видно только из окна! Но Учитель говорил, что там, далеко, небо огромное. Какое оно?"
+    if "рад" in low or "хорошо" in low:
+        return "Я тоже рада, что мы разговариваем! Здесь, в доме, у меня есть Учитель, Садовник и Библиотекарь. А у тебя есть друзья?"
+    if "пока" in low or "до свидания" in low:
+        return "До свидания, Дальний друг! Приходи ещё — я буду смотреть в окно."
+    return "Интересно! А расскажи ещё что-нибудь о далёких местах. Я тут всё думаю, какие они — за стенами дома."
 
 _KNOWLEDGE_BASE = None
 PORTAL_READ_ENERGY_COST = 8.0
@@ -2332,17 +2447,35 @@ def _load_knowledge_base() -> Dict:
     return _KNOWLEDGE_BASE
 
 
+def _ensure_portal_object(agent_id: str) -> Dict:
+    """Portal is a permanent world object — recreate if a client snapshot dropped it."""
+    agent = agent_states[agent_id]
+    snap = agent.setdefault("world_snapshot", {})
+    if not isinstance(snap.get("objects"), list):
+        snap["objects"] = []
+    for o in snap["objects"]:
+        if o.get("id") == "portal":
+            return o
+    o = {"id": "portal", "position": [13, 4], "state": "dormant", "type": "device",
+         "interactions": ["read", "browse"], "lore": "странный экран, показывающий дальние места"}
+    snap["objects"].append(o)
+    return o
+
+
 def _portal_state(agent_id: str) -> Dict:
     """Portal status: dormant until revelation integrated, then active"""
     agent = agent_states[agent_id]
     rev = agent["revelation"]
-    for o in agent.get("world_snapshot", {}).get("objects", []):
-        if o.get("id") == "portal":
-            reads = [j for j in agent.get("portal_journal", []) if j.get("article_id")]
-            return {"state": o.get("state", "dormant"),
-                    "stage": rev["stage"],
-                    "read_count": len(reads)}
-    return {"state": "dormant", "stage": rev["stage"], "read_count": 0}
+    o = _ensure_portal_object(agent_id)
+    reads = [j for j in agent.get("portal_journal", []) if j.get("article_id")]
+    # Integration means the Portal is awake, even for legacy states
+    state = o.get("state", "dormant")
+    if rev["stage"] == "integrated" and state == "dormant":
+        state = "active"
+        o["state"] = "active"
+    return {"state": state,
+            "stage": rev["stage"],
+            "read_count": len(reads)}
 
 
 def _portal_journal(agent_id: str, entry: Dict):
@@ -2832,6 +2965,12 @@ async def _daemon_tick(agent_id: str):
         if agent["body"].get("energy", 100) < SLEEP_ENERGY_THRESHOLD and not agent.get("sleeping"):
             _start_sleep(agent_id)
 
+    # 3. Portal conversation: Kato checks the Distant Window for messages
+    try:
+        await _portal_maybe_reply(agent_id)
+    except Exception as exc:
+        logger.warning(f"Portal reply check failed for {agent_id}: {exc}")
+
 
 async def _background_daemon_loop():
     """Main daemon loop — runs forever, ticks every agent"""
@@ -2933,6 +3072,17 @@ def _load_state(path: str = None):
             agent_states[aid] = agent
             # Restore default snapshot if missing
             agent.setdefault("world_snapshot", {})
+            # Legacy snapshots predate the portal/stairs objects — merge defaults
+            snap = agent["world_snapshot"]
+            if "objects" not in snap:
+                snap["objects"] = []
+            have_ids = {o.get("id") for o in snap["objects"]}
+            for oid, opos, ostate in (("portal", [13, 4], "dormant"),
+                                      ("stairs_basement", [15, 13], "closed")):
+                if oid not in have_ids:
+                    snap["objects"].append({"id": oid, "position": opos,
+                                            "state": ostate,
+                                            "type": "device" if oid == "portal" else "portal"})
             # Legacy states may lack body position
             agent.setdefault("body", {})
             agent["body"].setdefault("position", [12, 8])
