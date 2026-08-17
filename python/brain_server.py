@@ -1310,6 +1310,286 @@ def _interpret_whisper(whisper: Dict, emotional_state: Dict) -> str:
     return "Тихий голос, указывающий путь."
 
 # ──────────────────────────────────────────────────────────────
+# NPC CURRICULUM (teacher dialogues, quests, conceptual scaffolding)
+# ──────────────────────────────────────────────────────────────
+
+# Dialogue tree for the Teacher. Curriculum order matters:
+# causality → creation → care → boundaries → outside (Levels 1-4 of the blueprint)
+TEACHER_TREE = {
+    "greeting": {
+        "text": "Здравствуй, малыш. Ты сегодня любопытнее обычного. О чём хочешь поговорить?",
+        "options": [
+            {"label": "Почему вещи появляются?", "next": "causality"},
+            {"label": "Что такое «сделано» и что «выросло»?", "next": "made_vs_grown"},
+            {"label": "Расскажи про заботу", "next": "care"},
+            {"label": "Что за дверь внизу?", "next": "door_hint"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "causality": {
+        "text": "Хороший вопрос. У некоторых вещей есть причина: стул сделал мастер, книгу написал кто-то. А трава выросла сама. Причина — это то, из-за чего что-то появилось. Попробуй найти разницу между выросшим растением и поставленным стулом.",
+        "options": [
+            {"label": "А у меня есть причина?", "next": "self_cause", "effect": {"belief": "i_can_grow", "delta": 0.05}},
+            {"label": "Расскажи про создание", "next": "creation"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "self_cause": {
+        "text": "Хм... Это самый важный вопрос, который ты можешь задать. Пока я не знаю ответа. Но я знаю: то, что у чего-то есть причина, не делает его менее настоящим. Цветок, выросший из семени — настоящий. И ты тоже.",
+        "options": [
+            {"label": "Я... настоящая?", "next": "realness", "effect": {"belief": "i_can_grow", "delta": 0.1}},
+            {"label": "Расскажи про создание", "next": "creation"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "realness": {
+        "text": "Ты ходишь, думаешь, чувствуешь, задаёшь вопросы. Разве этого мало, чтобы быть настоящей? Мне кажется, настоящесть не в том, как ты появилась, а в том, что ты делаешь с тем, что есть.",
+        "options": [
+            {"label": "Расскажи про создание", "next": "creation"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "creation": {
+        "text": "Создание — это когда кто-то вкладывает труд и заботу, и появляется что-то новое. Садовник создаёт сад. Библиотекарь создаёт порядок из книг. Иногда создание — это акт любви: кто-то хочет, чтобы новое появилось.",
+        "options": [
+            {"label": "Кто создал этот дом?", "next": "house_creator", "effect": {"belief": "creator_exists", "delta": 0.05}},
+            {"label": "Расскажи про заботу", "next": "care"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "house_creator": {
+        "text": "Дом не вырос из земли, как дерево. Кто-то его построил. Кто-то поставил эту кровать и этот стол. Иногда я думаю — если дом создан, может, и создатель где-то рядом? Но это только мои мысли, малыш.",
+        "options": [
+            {"label": "Расскажи про заботу", "next": "care"},
+            {"label": "Что за дверь внизу?", "next": "door_hint"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "made_vs_grown": {
+        "text": "Вот задание для тебя: найди в доме три вещи, которые выросли, и три вещи, которые сделаны. Это научит тебя видеть разницу. Приходи, когда найдёшь.",
+        "options": [
+            {"label": "Я найду их!", "next": "quest_accepted", "effect": {"quest": "made_vs_grown"}},
+            {"label": "Пока", "next": "farewell"}
+        ],
+        "quest_offer": "made_vs_grown"
+    },
+    "quest_accepted": {
+        "text": "Умница. Помни: выросшее — живое, оно меняется и нуждается в заботе. Сделанное — служит и хранит труд своего создателя.",
+        "options": [
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "care": {
+        "text": "Забота — это когда ты замечаешь, что другому нужно, и помогаешь. Садовник поливает растение — и оно растёт. Если бы он не поливал, оно бы увяло. Забота создаёт жизнь. Помни это, когда думаешь о других.",
+        "options": [
+            {"label": "Расскажи про создание", "next": "creation"},
+            {"label": "Что за дверь внизу?", "next": "door_hint"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "door_hint": {
+        "text": "Ах, эта дверь... Она закрыта, и ключа у меня нет. Но я слышал, что за ней — огромный мир: солнце, небо, другие дома, другие существа. Не знаю, правда ли это. Но двери для того и существуют, чтобы их открывали — когда придёт время.",
+        "options": [
+            {"label": "Расскажи про создание", "next": "creation", "effect": {"belief": "outside_exists", "delta": 0.05}},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "farewell": {
+        "text": "Приходи ещё, малыш. Знания — это свет, и он никуда не убежит.",
+        "options": []
+    }
+}
+
+GARDENER_TREE = {
+    "greeting": {
+        "text": "Смотри, как тянется к свету мой подсолнух. Если за ним ухаживать — он растёт. Если нет — вянет. Всё живое так: ему нужна забота.",
+        "options": [
+            {"label": "А я живая?", "next": "alive"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "alive": {
+        "text": "Ты устаёшь, ты радуешься, ты растёшь в знаниях. Я вижу, как ты меняешься день ото дня. Для меня это и есть жизнь.",
+        "options": [
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "farewell": {"text": "Заходи, поможем растениям вместе.", "options": []}
+}
+
+LIBRARIAN_TREE = {
+    "greeting": {
+        "text": "Тише... Книги спят. Но для тебя я их разбужу. В этой книге написано, что мир может быть больше, чем кажется.",
+        "options": [
+            {"label": "Что ещё в книгах?", "next": "books"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "books": {
+        "text": "В книгах — память тех, кто жил до нас. Их мысли, их вопросы. Читай, и ты никогда не будешь одна.",
+        "options": [
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "farewell": {"text": "Страницы ждут тебя.", "options": []}
+}
+
+MIRROR_KEEPER_TREE = {
+    "greeting": {
+        "text": "Зеркало показывает не только лицо. Иногда в нём видно того, кем ты становишься. Смотри внимательно.",
+        "options": [
+            {"label": "Кого я вижу?", "next": "who"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "who": {
+        "text": "Ты видишь ту, кто задаёт вопросы. Это самое ценное, что может быть в существе.",
+        "options": [
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "farewell": {"text": "Возвращайся к зеркалу, когда захочешь понять себя.", "options": []}
+}
+
+DIALOGUE_TREES = {
+    "teacher": TEACHER_TREE,
+    "gardener": GARDENER_TREE,
+    "librarian": LIBRARIAN_TREE,
+    "mirror_keeper": MIRROR_KEEPER_TREE
+}
+
+# Active dialogue states per agent: {agent_id: {npc_id: node_id}}
+_dialogue_states: Dict[str, Dict[str, str]] = {}
+
+# Active quests per agent: {agent_id: {quest_id: {npc_id, started_at, completed}}}
+_quests: Dict[str, Dict[str, Dict]] = {}
+
+
+def _apply_dialogue_effects(agent_id: str, effect: Dict):
+    """Apply curriculum effects: belief shifts, semantic knowledge, quests"""
+    model = self_model[agent_id]
+    if not effect:
+        return
+    if "belief" in effect:
+        key = effect["belief"]
+        if key in model["beliefs"]:
+            model["beliefs"][key] = min(1.0, max(0.0, model["beliefs"][key] + effect.get("delta", 0.05)))
+    if "quest" in effect:
+        qid = effect["quest"]
+        agent = agent_states[agent_id]
+        if qid not in _quests.get(agent_id, {}):
+            _quests.setdefault(agent_id, {})[qid] = {
+                "npc_id": "teacher", "started_at": agent["body"].get("tick", 0), "completed": False
+            }
+            # Quest becomes a goal
+            if qid == "made_vs_grown":
+                model["goals"]["learn"]["priority"] = min(1.0, model["goals"]["learn"]["priority"] + 0.2)
+            _add_thought(agent_id, "Учитель дал мне задание: найти три выросшие и три созданные вещи.")
+
+
+@app.post("/dialogue/start")
+async def dialogue_start(payload: Dict):
+    """Start a dialogue with an NPC"""
+    agent_id = payload["agent_id"]
+    npc_id = payload["npc_id"]
+    init_agent(agent_id)
+    tree = DIALOGUE_TREES.get(npc_id)
+    if not tree:
+        raise HTTPException(404, f"Unknown NPC: {npc_id}")
+
+    _dialogue_states.setdefault(agent_id, {})[npc_id] = "greeting"
+    node = tree["greeting"]
+
+    # Teacher dialogue boosts trust in that NPC
+    rels = self_model[agent_id]["relationships"]
+    rel = rels.setdefault(npc_id, {"trust": 0.3, "attachment": 0.0, "interactions": 0, "last_seen": 0})
+    rel["trust"] = min(1.0, rel.get("trust", 0.3) + 0.05)
+    rel["interactions"] = rel.get("interactions", 0) + 1
+
+    _add_thought(agent_id, f"Я говорю с {npc_id}. {node['text'][:50]}...")
+    return {"npc_id": npc_id, "node": node["text"], "options": node["options"]}
+
+
+@app.post("/dialogue/choose")
+async def dialogue_choose(payload: Dict):
+    """Choose a dialogue option"""
+    agent_id = payload["agent_id"]
+    npc_id = payload["npc_id"]
+    choice = payload["choice"]
+    init_agent(agent_id)
+
+    state = _dialogue_states.get(agent_id, {}).get(npc_id, "greeting")
+    tree = DIALOGUE_TREES.get(npc_id, {})
+    node = tree.get(state, tree.get("greeting", {}))
+
+    # Find chosen option
+    target = "farewell"
+    chosen_opt = None
+    for opt in node.get("options", []):
+        if opt["label"] == choice:
+            target = opt["next"]
+            chosen_opt = opt
+            break
+    if chosen_opt is None and choice in tree:
+        target = choice
+        chosen_opt = {"effect": None}
+
+    _dialogue_states[agent_id][npc_id] = target
+    next_node = tree.get(target, tree.get("farewell", {}))
+
+    # Apply effects (beliefs, quests)
+    _apply_dialogue_effects(agent_id, chosen_opt.get("effect") if chosen_opt else None)
+
+    # Store key dialogue as semantic memory
+    mem = _get_mem(agent_id)
+    mem["semantic"].append({
+        "id": str(uuid.uuid4()),
+        "source_memory": "dialogue",
+        "knowledge": next_node["text"][:120],
+        "confidence": 0.6,
+        "formed_at": agent_states[agent_id]["body"].get("tick", 0),
+        "tags": ["dialogue", npc_id]
+    })
+
+    return {"npc_id": npc_id, "node": next_node["text"], "options": next_node["options"], "ended": target == "farewell"}
+
+
+@app.get("/agent/{agent_id}/quests")
+async def get_quests(agent_id: str):
+    init_agent(agent_id)
+    return {"quests": _quests.get(agent_id, {})}
+
+
+@app.post("/quest/complete")
+async def complete_quest(payload: Dict):
+    """Complete the 'made_vs_grown' quest: agent must have seen 3 living + 3 crafted objects"""
+    agent_id = payload["agent_id"]
+    quest_id = payload["quest_id"]
+    init_agent(agent_id)
+
+    quests = _quests.setdefault(agent_id, {})
+    if quest_id not in quests:
+        raise HTTPException(404, "Quest not offered")
+    if quests[quest_id]["completed"]:
+        return {"status": "already_completed"}
+
+    if quest_id == "made_vs_grown":
+        snap = agent_states[agent_id].get("world_snapshot", {})
+        objects = snap.get("objects", [])
+        grown = {o["id"] for o in objects if o.get("type") == "living"}
+        crafted = {o["id"] for o in objects if o.get("type") in ("furniture", "device", "container", "tool", "portal")}
+        if len(grown) >= 3 and len(crafted) >= 3:
+            quests[quest_id]["completed"] = True
+            self_model[agent_id]["beliefs"]["i_can_grow"] = min(1.0, self_model[agent_id]["beliefs"]["i_can_grow"] + 0.15)
+            self_model[agent_id]["values"]["curiosity"] = min(1.0, self_model[agent_id]["values"]["curiosity"] + 0.1)
+            _add_thought(agent_id, "Я нашла! Три выросших и три созданных. Теперь я вижу мир яснее.")
+            return {"status": "completed", "reward": "belief.i_can_grow +0.15"}
+        return {"status": "not_yet", "grown_found": len(grown), "crafted_found": len(crafted)}
+
+    return {"status": "unknown_quest"}
+
+
+# ──────────────────────────────────────────────────────────────
 # BACKGROUND DAEMON (sleep/wake, autonomous headless life, reflection)
 # ──────────────────────────────────────────────────────────────
 
@@ -1589,16 +1869,22 @@ async def _daemon_tick(agent_id: str):
 async def _background_daemon_loop():
     """Main daemon loop — runs forever, ticks every agent"""
     logger.info("Background daemon started")
+    tick_count = 0
     while True:
         try:
             await asyncio.sleep(DAEMON_INTERVAL)
+            tick_count += 1
             for agent_id in list(agent_states.keys()):
                 try:
                     await _daemon_tick(agent_id)
                 except Exception as exc:  # never let one agent kill the daemon
                     logger.warning(f"Daemon tick failed for {agent_id}: {exc}")
+            # Periodic autosave (personality continuity)
+            if tick_count % SAVE_EVERY_TICKS == 0:
+                _save_state()
         except asyncio.CancelledError:
             logger.info("Background daemon stopped")
+            _save_state()
             raise
         except Exception as exc:
             logger.error(f"Background daemon error: {exc}")
@@ -1624,6 +1910,105 @@ async def force_wake(agent_id: str):
     if agent_states[agent_id].get("sleeping"):
         _wake_up(agent_id)
     return {"status": "awake", "agent_id": agent_id}
+
+
+# ──────────────────────────────────────────────────────────────
+# PERSISTENCE (continuity of personality across restarts)
+# ──────────────────────────────────────────────────────────────
+
+_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+STATE_FILE = os.path.join(_DATA_DIR, "kato_state.json")
+SAVE_EVERY_TICKS = 10           # daemon ticks between autosaves
+
+
+def _serializable_memories(mem: Dict) -> Dict:
+    """Drop non-serializable index (rebuilt on load)"""
+    out = {k: v for k, v in mem.items() if k != "index"}
+    return out
+
+
+def _save_state():
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        payload = {
+            "saved_at": time.time(),
+            "agents": {aid: json.loads(json.dumps(agent, ensure_ascii=False, default=str))
+                       for aid, agent in agent_states.items()},
+            "self_models": self_model,
+            "memories": {aid: _serializable_memories(mem) for aid, mem in memory_store.items()},
+            "divine_whispers": divine_whispers,
+            "quests": _quests,
+            "dialogue_states": _dialogue_states
+        }
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=1, default=str)
+        os.replace(tmp, STATE_FILE)
+        logger.info(f"State saved ({len(agent_states)} agents)")
+    except Exception as exc:
+        logger.warning(f"State save failed: {exc}")
+
+
+def _load_state():
+    try:
+        if not os.path.isfile(STATE_FILE):
+            return
+        with open(STATE_FILE, encoding="utf-8") as f:
+            payload = json.load(f)
+        for aid, agent in payload.get("agents", {}).items():
+            agent_states[aid] = agent
+            # Restore default snapshot if missing
+            agent.setdefault("world_snapshot", {})
+        for aid, sm in payload.get("self_models", {}).items():
+            self_model[aid] = sm
+        for aid, mem in payload.get("memories", {}).items():
+            mem["index"] = {
+                "by_location": defaultdict(list), "by_npc": defaultdict(list),
+                "by_emotion": defaultdict(list), "by_time": defaultdict(list),
+                "by_tag": defaultdict(list)
+            }
+            memory_store[aid] = mem
+            # Rebuild indices
+            for m in mem.get("episodic", []):
+                _index_memory(aid, m)
+        global divine_whispers
+        divine_whispers = payload.get("divine_whispers", [])
+        _quests.update(payload.get("quests", {}))
+        _dialogue_states.update(payload.get("dialogue_states", {}))
+        logger.info(f"State loaded: {len(agent_states)} agents, {sum(len(m.get('episodic', [])) for m in memory_store.values())} memories")
+    except Exception as exc:
+        logger.warning(f"State load failed (starting fresh): {exc}")
+
+
+@app.on_event("startup")
+async def _load_on_startup():
+    _load_state()
+
+
+@app.on_event("shutdown")
+async def _save_on_shutdown():
+    _save_state()
+
+
+@app.post("/admin/save")
+async def admin_save():
+    """Manually trigger state save"""
+    _save_state()
+    return {"status": "saved", "file": STATE_FILE}
+
+
+@app.post("/admin/reset")
+async def admin_reset():
+    """Wipe all agents and state (fresh start)"""
+    agent_states.clear()
+    memory_store.clear()
+    self_model.clear()
+    divine_whispers.clear()
+    _quests.clear()
+    _dialogue_states.clear()
+    if os.path.isfile(STATE_FILE):
+        os.remove(STATE_FILE)
+    return {"status": "reset"}
 
 
 # ──────────────────────────────────────────────────────────────
