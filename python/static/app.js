@@ -1,7 +1,7 @@
 /* Kato World — God View Dashboard */
 const API = '';
 const AGENT = 'kato';
-const TILE = 16;
+const TILE = 32;
 const WORLD_W = 50, WORLD_H = 30;
 
 // ── i18n ───────────────────────────────────────────────────────
@@ -341,7 +341,7 @@ function renderWorld() {
   const tod = world && world.time_of_day != null ? world.time_of_day : 0.3;
   // Day-night dimming
   const night = Math.sin((tod - 0.25) * Math.PI * 2) * 0.5 + 0.5; // 0=night 1=day
-  const dim = 0.55 + night * 0.45;
+  const dim = 0.82 + night * 0.18;
 
   // ── Tiles: rooms with distinct floors, walls, garden ──
   // Layout: house x2..15, y2..15; rooms: bedroom x2..6, study x7..11,
@@ -415,7 +415,7 @@ function renderWorld() {
     // state badge (locked/off/closed)
     if (o.state && o.state !== 'free' && o.state !== 'healthy' && o.state !== 'dormant') {
       ctx.fillStyle = '#ff6050';
-      ctx.fillRect(ox * TILE + 12, oy * TILE, 4, 4);
+      ctx.fillRect(ox * TILE + 18, oy * TILE, 6, 6);
     }
   }
 
@@ -425,13 +425,13 @@ function renderWorld() {
     ctx.globalCompositeOperation = 'lighter';
     // Window glows warm from inside
     ctx.fillStyle = 'rgba(255, 210, 120, 0.25)';
-    ctx.fillRect(12 * TILE - 2, 2 * TILE - 2, 20, 20);
+    ctx.fillRect(12 * TILE - 4, 2 * TILE - 4, 32, 32);
     // Lamp sheds light
     const lamp = objs.find(o => o.id === 'lamp');
     if (lamp && lamp.state !== 'off') {
       ctx.fillStyle = 'rgba(245, 215, 110, 0.22)';
       ctx.beginPath();
-      ctx.arc(5 * TILE + 8, 5 * TILE + 8, 22, 0, Math.PI * 2);
+      ctx.arc(5 * TILE + 12, 5 * TILE + 12, 34, 0, Math.PI * 2);
       ctx.fill();
     }
     // Terminal glows when revelation started
@@ -439,7 +439,7 @@ function renderWorld() {
     if (term && term.state !== 'locked') {
       ctx.fillStyle = 'rgba(80, 220, 200, 0.3)';
       ctx.beginPath();
-      ctx.arc(7 * TILE + 8, 4 * TILE + 8, 18, 0, Math.PI * 2);
+      ctx.arc(7 * TILE + 12, 4 * TILE + 12, 28, 0, Math.PI * 2);
       ctx.fill();
     }
     // Portal pulses softly when active
@@ -448,7 +448,7 @@ function renderWorld() {
       const pulse = 0.15 + 0.12 * Math.sin(Date.now() / 400);
       ctx.fillStyle = `rgba(64, 192, 255, ${pulse})`;
       ctx.beginPath();
-      ctx.arc(13 * TILE + 8, 4 * TILE + 8, 24, 0, Math.PI * 2);
+      ctx.arc(13 * TILE + 12, 4 * TILE + 12, 36, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
@@ -475,7 +475,7 @@ function renderWorld() {
     // mood dot
     const moodColor = n.mood === 'calm' || n.mood === 'peaceful' || n.mood === 'quiet' ? '#7af0a0' : '#f0a060';
     ctx.fillStyle = moodColor;
-    ctx.fillRect(nx * TILE + 12, ny * TILE + 12, 4, 4);
+    ctx.fillRect(nx * TILE + 18, ny * TILE + 18, 6, 6);
   }
 
   // ── Agent ──
@@ -483,12 +483,12 @@ function renderWorld() {
     const [ax, ay] = world.agent_position;
     // shadow
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(ax * TILE + 2, ay * TILE + 12, 12, 4);
+    ctx.fillRect(ax * TILE + 4, ay * TILE + 18, 16, 6);
     drawSprite(ctx, ax, ay - 4, AGENT_SPRITE);
     // name
     ctx.fillStyle = '#ffffff';
-    ctx.font = '8px monospace';
-    ctx.fillText('KATO', ax * TILE, ay * TILE - 4);
+    ctx.font = '12px monospace';
+    ctx.fillText('KATO', ax * TILE, ay * TILE - 6);
   }
 
   // time of day indicator
