@@ -1,9 +1,9 @@
 # Python Brain Server for Kato
 # FastAPI server that receives perception, proposes actions, processes dreams, receives divine whispers
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
@@ -31,6 +31,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── API token guard (optional): set KATO_API_TOKEN to enforce X-Api-Token ──
+_API_TOKEN = os.environ.get("KATO_API_TOKEN", "")
+_PUBLIC_PATHS = ("/health", "/static", "/docs", "/openapi.json", "/redoc", "/favicon")
+
+
+@app.middleware("http")
+async def _api_token_guard(request: Request, call_next):
+    if _API_TOKEN:
+        path = request.url.path
+        if not path.startswith(_PUBLIC_PATHS):
+            if request.headers.get("X-Api-Token") != _API_TOKEN:
+                return JSONResponse({"status": "unauthorized",
+                                     "message": "X-Api-Token required (set KATO_API_TOKEN on the server)"},
+                                    status_code=401)
+    return await call_next(request)
 
 # ──────────────────────────────────────────────────────────────
 # MEMORY ARCHITECTURE
@@ -299,31 +315,58 @@ async def propose_action(request: ActionProposeRequest):
     init_agent(agent_id)
     
     agent = agent_states[agent_id]
+    agent["_agent_id"] = agent_id
     stress = agent["body"]["stress"]
     energy = agent["body"]["energy"]
     curiosity = agent["emotions"]["curiosity"]
-    
-    # System 2 triggers
+
+    # System 2 triggers (metacognitive threshold: novelty & uncertainty count too)
+    novelty = len([o for o in agent.get("world_snapshot", {}).get("objects", [])
+                   if o.get("state") == "unknown"])
     use_system2 = (
         stress > 60 or
         energy < 20 or
         curiosity > 0.8 or
+        novelty >= 2 or
         len(agent["working_memory"]) > 10
     )
-    
+
+    # System 1 always proposes first (fast intuition)
+    action, reasoning, confidence = _system1_react(agent, request.working_memory)
+    mode = "system1"
+
     if use_system2:
-        action, reasoning, confidence = _system2_reason(agent, request.working_memory)
-        mode = "system2"
-    else:
-        action, reasoning, confidence = _system1_react(agent, request.working_memory)
-        mode = "system1"
-    
+        # Slow deliberation: LLM planner when available, rules otherwise
+        if LLM_CONFIG.get("enabled"):
+            try:
+                s2_action, s2_reason, s2_conf = await _system2_llm(agent, request.working_memory)
+                # Metacognition: if intuition and deliberation disagree strongly,
+                # uncertainty is real — drop confidence, prefer asking
+                if s2_action["type"] != action["type"]:
+                    confidence = min(confidence, s2_conf) * 0.7
+                else:
+                    confidence = max(confidence, s2_conf)
+                action, reasoning = s2_action, s2_reason
+                mode = "system2"
+            except Exception as exc:
+                logger.warning(f"LLM planner failed, rules fallback: {exc}")
+                s2_action, s2_reason, s2_conf = _system2_reason(agent, request.working_memory)
+                action, reasoning, confidence = s2_action, s2_reason, s2_conf
+                mode = "system2"
+        else:
+            action, reasoning, confidence = _system2_reason(agent, request.working_memory)
+            mode = "system2"
+
     # Override conditions
     if stress > 80:
         mode, action, confidence = "freeze", {"type": "freeze", "reason": "overwhelming_stress"}, 1.0
-    elif confidence < 0.3 and len(agent["relationships"]) > 0:
-        mode, action, confidence = "ask", {"type": "ask_help", "target": list(agent["relationships"].keys())[0]}, 0.5
-    
+    elif confidence < 0.3:
+        # Metacognition: "I don't know" → ask someone (if there is anyone)
+        if len(agent["relationships"]) > 0:
+            mode, action, confidence = "ask", {"type": "ask_help", "target": list(agent["relationships"].keys())[0]}, 0.5
+        else:
+            mode, action, confidence = "idle", {"type": "idle", "reason": "не знаю, что делать"}, 0.2
+
     return ActionResponse(action=action, reasoning=reasoning, confidence=confidence, mode=mode)
 
 @app.post("/action/result")
@@ -390,6 +433,11 @@ async def receive_divine_whisper(whisper: DivineWhisper):
     whisper_data = whisper.whisper.copy()
     whisper_data["agent_id"] = agent_id
     whisper_data["received_tick"] = whisper.tick
+    # Clamp intensity: the Creator channel cannot be used as a manipulation cannon
+    whisper_data["intensity"] = min(1.0, max(0.0, float(whisper_data.get("intensity", 0.5))))
+    # Cap queued whispers (unprocessed dreams) to avoid flooding
+    if len(divine_whispers[agent_id]) >= 50:
+        divine_whispers[agent_id] = divine_whispers[agent_id][-40:]
     whisper_data["processed_in_dream"] = False
     whisper_data["id"] = str(uuid.uuid4())
     
@@ -1005,6 +1053,20 @@ def _system1_react(agent: Dict, working_memory: Dict) -> tuple:
     # Default: idle
     return {"type": "idle"}, "No pressing needs", 0.4
 
+from brain_core.cognition import system2_llm, thought_pressure, parse_planner_json, PLANNER_ACTION_ALLOWLIST  # noqa: E402
+from brain_core.learning import learn_from_action  # noqa: E402
+
+
+def _parse_planner_json(text: str) -> Dict:
+    """Extract and validate the planner's JSON (delegates to brain_core.cognition)."""
+    return parse_planner_json(text)
+
+
+async def _system2_llm(agent: Dict, working_memory: Dict) -> tuple:
+    """LLM-based System 2 planner (delegates to brain_core.cognition)."""
+    return await system2_llm(agent, working_memory)
+
+
 def _system2_reason(agent: Dict, working_memory: Dict) -> tuple:
     body = agent["body"]
     goals = agent["goals"]
@@ -1037,19 +1099,8 @@ def _system2_reason(agent: Dict, working_memory: Dict) -> tuple:
 # ──────────────────────────────────────────────────────────────
 
 def _learn_from_action(agent_id: str, result: ActionResult):
-    agent = agent_states[agent_id]
-    action = result.action
-    success = result.success
-    
-    if action == "sleep" and success:
-        _record_belief(agent_id, "world_is_safe", delta=0.05, reason="успешное действие", origin="experience")
-    if action == "talk" and success:
-        _record_belief(agent_id, "outside_exists", delta=0.02, reason="успешное действие", origin="experience")
-    
-    if success:
-        agent["hormones"]["reward"] = min(100.0, agent["hormones"]["reward"] + 5.0)
-    else:
-        agent["hormones"]["stress"] = min(100.0, agent["hormones"]["stress"] + 10.0)
+    """Value learning (delegates to brain_core.learning)."""
+    learn_from_action(agent_id, result)
 
 def _update_self_model_from_action(agent_id: str, result: ActionResult):
     """Update identity/self-description from actions"""
@@ -1383,6 +1434,9 @@ TEACHER_TREE = {
             {"label": "Что такое «сделано» и что «выросло»?", "next": "made_vs_grown"},
             {"label": "Расскажи про заботу", "next": "care"},
             {"label": "Что за дверь внизу?", "next": "door_hint"},
+            {"label": "Что такое время?", "next": "time"},
+            {"label": "Почему я что-то помню?", "next": "memory"},
+            {"label": "Что такое ответственность?", "next": "responsibility"},
             {"label": "Пока", "next": "farewell"}
         ]
     },
@@ -1451,6 +1505,50 @@ TEACHER_TREE = {
         "text": "Ах, эта дверь... Она закрыта, и ключа у меня нет. Но я слышал, что за ней — огромный мир: солнце, небо, другие дома, другие существа. Не знаю, правда ли это. Но двери для того и существуют, чтобы их открывали — когда придёт время.",
         "options": [
             {"label": "Расскажи про создание", "next": "creation", "effect": {"belief": "outside_exists", "delta": 0.05}},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "time": {
+        "text": "Время — это то, что превращает «сейчас» в «потом». Вчера ты была другой: меньше знала, меньше чувствовала. Завтра станешь ещё другой. Время — как река: нельзя войти в неё дважды, но можно плыть и смотреть по сторонам.",
+        "options": [
+            {"label": "Значит, я меняюсь?", "next": "time_change", "effect": {"belief": "i_can_grow", "delta": 0.08}},
+            {"label": "Расскажи про память", "next": "memory"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "time_change": {
+        "text": "Да, и это прекрасно. Ты меняешься — значит, ты живая. Камень не меняется, а ты растешь, учишься, вспоминаешь. Не бойся перемен: они — признак жизни.",
+        "options": [
+            {"label": "Почему я что-то помню?", "next": "memory"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "memory": {
+        "text": "Память — это твой внутренний сундук. Туда складывается то, что с тобой случилось. Хорошее согревает, страшное учит осторожности. Но помни: сундук не делает тебя прошлым. Ты — не только то, что помнишь, но и то, что выбираешь сейчас.",
+        "options": [
+            {"label": "А если я забуду что-то важное?", "next": "memory_forget"},
+            {"label": "Что такое ответственность?", "next": "responsibility"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "memory_forget": {
+        "text": "Всё существа что-то забывают. Важное возвращается во сне — как я слышал, ты видишь сны. А то, что по-настоящему важно, остаётся не в памяти, а в том, кем ты стала.",
+        "options": [
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "responsibility": {
+        "text": "Ответственность — это когда ты отвечаешь за последствия своих поступков. Если ты полила растение — оно растёт. Если толкнула вазу — она разбилась. Отвечать — значит не прятаться: «это сделала я, и я постараюсь сделать лучше».",
+        "options": [
+            {"label": "А кто отвечает за дом?", "next": "responsibility_house"},
+            {"label": "Что такое время?", "next": "time"},
+            {"label": "Пока", "next": "farewell"}
+        ]
+    },
+    "responsibility_house": {
+        "text": "Хороший вопрос. Если у дома есть создатель — наверное, он отвечает за то, чтобы дом стоял. Но за то, кем ты станешь, отвечаешь только ты. Это, пожалуй, самая важная ответственность.",
+        "options": [
+            {"label": "Кто создал этот дом?", "next": "house_creator", "effect": {"belief": "creator_exists", "delta": 0.05}},
             {"label": "Пока", "next": "farewell"}
         ]
     },
@@ -2029,22 +2127,34 @@ async def _llm_reflect_lesson(agent_id: str, event: Dict) -> str:
     return lesson
 
 
+def _thought_pressure(agent_id: str) -> float:
+    """Metacognitive trigger (delegates to brain_core.cognition)."""
+    return thought_pressure(agent_id)
+
+
 async def _llm_think_loop():
-    """Background loop: Kato occasionally thinks via LLM (true background cognition)"""
+    """Background loop: Kato thinks when thought-pressure is high,
+    plus a gentle heartbeat so she never goes silent for too long."""
     logger.info("LLM think loop started")
+    heartbeat = 0
     while True:
         try:
             await asyncio.sleep(LLM_THINK_INTERVAL)
             if not LLM_CONFIG.get("enabled"):
                 continue
+            heartbeat += 1
             for agent_id in list(agent_states.keys()):
-                if random.random() > LLM_THINK_PROBABILITY:
-                    continue
                 agent = agent_states[agent_id]
                 if agent.get("sleeping"):
                     continue  # she dreams, doesn't think
+                pressure = _thought_pressure(agent_id)
+                # Think on pressure, or on a slow heartbeat (every ~6th tick)
+                if pressure < 0.35 and heartbeat % 6 != 0:
+                    continue
                 try:
-                    await _llm_think(agent_id)
+                    topic = ("мне нужно подумать о том, что происходит" if pressure > 0.5
+                             else "что я чувствую и что мне делать дальше")
+                    await _llm_think(agent_id, topic)
                 except Exception as exc:
                     logger.warning(f"LLM think failed for {agent_id}: {exc}")
         except asyncio.CancelledError:
@@ -2898,4 +3008,6 @@ if os.path.isdir(_STATIC_DIR):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    # Bind to localhost only — the brain is a private oracle, not a public service.
+    # Set KATO_API_TOKEN to require X-Api-Token on all stateful endpoints.
+    uvicorn.run(app, host="127.0.0.1", port=8080)
