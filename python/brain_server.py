@@ -16,6 +16,7 @@ import math
 import os
 import random
 import time
+import sys
 from pathlib import Path
 from collections import defaultdict
 
@@ -1770,6 +1771,47 @@ LLM_THINK_INTERVAL = 45.0              # seconds between autonomous LLM thoughts
 LLM_THINK_PROBABILITY = 0.7            # probability per interval tick
 
 
+# ──────────────────────────────────────────────────────────────
+# CONSCIOUSNESS MODULES (Global Workspace, Predictive Processing, etc.)
+# ──────────────────────────────────────────────────────────────
+
+# Per-agent consciousness modules
+consciousness_modules: Dict[str, Dict] = {}
+
+def _init_consciousness_modules(agent_id: str):
+    """Initialize all consciousness modules for an agent"""
+    from brain_core import (
+        create_global_workspace,
+        create_predictive_processor,
+        create_metacognition_engine,
+        create_agency_engine,
+        create_theory_of_mind,
+        create_narrative_self,
+        create_phenomenal_engine,
+    )
+    
+    if agent_id not in consciousness_modules:
+        consciousness_modules[agent_id] = {
+            "global_workspace": create_global_workspace(agent_id),
+            "predictive_processing": create_predictive_processor(agent_id),
+            "metacognition": create_metacognition_engine(agent_id),
+            "agency": create_agency_engine(agent_id),
+            "theory_of_mind": create_theory_of_mind(agent_id),
+            "narrative_self": create_narrative_self(agent_id),
+            "phenomenal": create_phenomenal_engine(agent_id),
+        }
+        # Set brain references for all modules - use the running brain_server instance
+        import sys
+        main_module = sys.modules.get('__main__')
+        if main_module is None or not hasattr(main_module, 'agent_states'):
+            import brain_server as main_module
+        for module in consciousness_modules[agent_id].values():
+            if hasattr(module, 'set_brain_ref'):
+                module.set_brain_ref(main_module)
+    
+    return consciousness_modules[agent_id]
+
+
 def _detect_llm() -> Dict:
     """Configure LLM: cloud key first, else local Ollama with a usable model"""
     # 1. Explicit cloud config
@@ -2941,7 +2983,7 @@ async def _reflect(agent_id: str):
 
 
 async def _daemon_tick(agent_id: str):
-    """One daemon tick for one agent: sleep management + autonomous life"""
+    """One daemon tick for one agent: sleep management + autonomous life + consciousness modules"""
     agent = agent_states[agent_id]
 
     # 1. Sleep cycle in progress → just progress it
@@ -2973,6 +3015,172 @@ async def _daemon_tick(agent_id: str):
         await _portal_maybe_reply(agent_id)
     except Exception as exc:
         logger.warning(f"Portal reply check failed for {agent_id}: {exc}")
+
+    # 4. CONSCIOUSNESS MODULES INTEGRATION
+    try:
+        await _consciousness_tick(agent_id, headless)
+    except Exception as exc:
+        logger.warning(f"Consciousness tick failed for {agent_id}: {exc}")
+
+
+async def _consciousness_tick(agent_id: str, headless: bool):
+    """Run all consciousness modules for one tick"""
+    try:
+        # Initialize modules if needed
+        modules = _init_consciousness_modules(agent_id)
+        logger.info(f"Consciousness modules initialized for {agent_id}: {list(modules.keys())}")
+    except Exception as exc:
+        logger.error(f"Module init failed for {agent_id}: {exc}", exc_info=True)
+        return
+    
+    agent = agent_states[agent_id]
+    perception = agent.get("world_snapshot", {})
+    body = agent.get("body", {})
+    emotions = agent.get("emotions", {})
+    goals = agent.get("goals", {})
+    beliefs = agent.get("beliefs", {})
+    
+    # Ensure goals and beliefs are dicts
+    if not isinstance(goals, dict):
+        goals = {}
+        agent["goals"] = goals
+    if not isinstance(beliefs, dict):
+        beliefs = {}
+        agent["beliefs"] = beliefs
+    
+    # Log module status
+    for name, mod in modules.items():
+        if mod is None:
+            logger.warning(f"Module {name} is None!")
+        else:
+            logger.debug(f"Module {name}: {type(mod)}")
+    
+    try:
+        # ---- PHENOMENAL ENGINE ----
+        # Raw feels from interoception, prediction, memory, agency
+        phenomenal_inputs = {
+            "energy": body.get("energy", 50),
+            "comfort": body.get("comfort", 50),
+            "stress": body.get("stress", 50),
+            "prediction_error": 0.0,  # will be filled by PP
+            "memory_match": 0.5,
+            "action_outcome_match": 0.5,
+            "choice_availability": len([g for g in goals.values() if g.get("active", False)]),
+            "social_presence": len(perception.get("nearby_npcs", [])),
+        }
+        phenomenal_state = modules["phenomenal"].step(phenomenal_inputs, "daemon_tick")
+        # Store for other modules
+        agent["phenomenal_state"] = {
+            "dimensions": {d.value: v for d, v in phenomenal_state.dimensions.items()},
+            "dominant": max(phenomenal_state.dimensions.items(), key=lambda x: x[1])[0].value,
+            "intensity": max(phenomenal_state.dimensions.values()),
+        }
+
+        # ---- PREDICTIVE PROCESSING ----
+        # Step hierarchical prediction, get surprise
+        pp_result = modules["predictive_processing"].step(perception, goals)
+        # Update phenomenal with prediction error
+        total_surprise = sum(abs(e) for e in pp_result.get("recent_surprises", []))
+        if total_surprise > 0:
+            # Feed back to phenomenal (would need re-step, simplified here)
+            pass
+        # Get conscious access candidates (surprise → attention)
+        gw_candidates = modules["predictive_processing"].get_conscious_access_candidates()
+
+        # ---- GLOBAL WORKSPACE ----
+        # Submit candidates from all sources
+        gw_items = []
+        
+        # From predictive processing (surprise)
+        for c in gw_candidates:
+            item = modules["global_workspace"].submit(c["source"], c["content"], c["activation"])
+            if item:
+                gw_items.append(item)
+        
+        # From phenomenal (strong feelings)
+        for dim, val in phenomenal_state.dimensions.items():
+            if val > 0.7:
+                item = modules["global_workspace"].submit(
+                    f"phenomenal_{dim.value}",
+                    {"dimension": dim.value, "value": val, "intensity": val},
+                    val
+                )
+                if item:
+                    gw_items.append(item)
+        
+        # From narrative (identity-relevant)
+        ns = modules["narrative_self"]
+        if ns.current_chapter and ns.current_chapter.identity_impact > 0.5:
+            item = modules["global_workspace"].submit(
+                "narrative_identity",
+                {"chapter": ns.current_chapter.title, "impact": ns.current_chapter.identity_impact},
+                ns.current_chapter.identity_impact
+            )
+            if item:
+                gw_items.append(item)
+        
+        # Run competition and broadcast
+        broadcast_items = modules["global_workspace"].competition_step(gw_items)
+        for item in broadcast_items:
+            packet = modules["global_workspace"].broadcast(item)
+            # Broadcast to all modules (they would receive this)
+            # For now, store in agent for dashboard
+            agent.setdefault("conscious_broadcasts", []).append(packet)
+            if len(agent["conscious_broadcasts"]) > 50:
+                agent["conscious_broadcasts"] = agent["conscious_broadcasts"][-50:]
+
+        # ---- METACOGNITION ----
+        # Monitor confidence calibration, error awareness
+        meta_state = modules["metacognition"].get_state()
+        agent["metacognition_state"] = meta_state
+
+        # ---- AGENCY ----
+        # Counterfactual simulation for action selection
+        agency_result = modules["agency"].step(perception, goals)
+        agent["agency_result"] = agency_result
+        # Selected action could be used for autonomous action
+        if headless and agency_result.get("action"):
+            # Could execute autonomous action here
+            pass
+
+        # ---- THEORY OF MIND ----
+        # Update models of NPCs from perception
+        for npc in perception.get("nearby_npcs", []):
+            modules["theory_of_mind"].update_from_observation(npc["id"], {
+                "type": npc.get("type", "npc"),
+                "behavior": {"action": "idle", "goal": "unknown"},
+                "context": {"position": npc.get("position")},
+                "my_state": {"position": perception.get("agent_position")}
+            })
+        # Update Creator model
+        modules["theory_of_mind"].update_creator_model({"text": "heartbeat"})
+
+        # ---- NARRATIVE SELF ----
+        # Add events to current chapter
+        if modules["narrative_self"].current_chapter:
+            for event in perception.get("recent_events", []):
+                modules["narrative_self"].add_event_to_chapter(
+                    event.get("id", str(time.time())),
+                    event,
+                    perception.get("tick", 0)
+                )
+        # Periodic autobiographical reasoning
+        if headless and random.random() < 0.1:
+            # Would trigger reasoning on salient memory
+            pass
+
+        # Update agent with module states for dashboard/API
+        agent["consciousness_modules"] = {
+            "global_workspace": modules["global_workspace"].get_conscious_state(),
+            "predictive_processing": modules["predictive_processing"].get_state(),
+            "metacognition": modules["metacognition"].get_state(),
+            "agency": modules["agency"].get_state(),
+            "theory_of_mind": modules["theory_of_mind"].get_state(),
+            "narrative_self": modules["narrative_self"].get_state(),
+            "phenomenal": modules["phenomenal"].get_state(),
+        }
+    except Exception as exc:
+        logger.error(f"Consciousness tick error for {agent_id}: {exc}", exc_info=True)
 
 
 async def _background_daemon_loop():

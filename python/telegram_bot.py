@@ -1,0 +1,326 @@
+# python/telegram_bot.py
+"""
+Telegram Bot for Kato World.
+Connects Telegram users to Kato's Distant Window (portal).
+Uses aiogram 3.x.
+"""
+import os
+import asyncio
+import logging
+import json
+import httpx
+from typing import Optional
+from dataclasses import dataclass
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
+
+# Configuration
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "REDACTED")
+KATO_API_URL = os.environ.get("KATO_API_URL", "http://127.0.0.1:8080")
+KATO_API_TOKEN = os.environ.get("KATO_API_TOKEN", "")
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("kato-telegram")
+
+# Bot and dispatcher
+bot = Bot(
+    token=TELEGRAM_BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
+dp = Dispatcher()
+
+# HTTP client for Kato API
+kato_client: Optional[httpx.AsyncClient] = None
+
+# User state tracking
+user_sessions: dict = {}  # user_id -> {"awaiting_reply": bool, "last_message_time": float}
+
+@dataclass
+class KatoResponse:
+    status: str
+    message: Optional[str] = None
+    conversation: Optional[list] = None
+
+async def get_kato_client() -> httpx.AsyncClient:
+    """Get or create HTTP client for Kato API"""
+    global kato_client
+    if kato_client is None:
+        headers = {}
+        if KATO_API_TOKEN:
+            headers["X-Api-Token"] = KATO_API_TOKEN
+        kato_client = httpx.AsyncClient(
+            base_url=KATO_API_URL,
+            headers=headers,
+            timeout=60.0
+        )
+    return kato_client
+
+async def close_kato_client():
+    """Close HTTP client on shutdown"""
+    global kato_client
+    if kato_client:
+        await kato_client.aclose()
+        kato_client = None
+
+async def send_to_portal(text: str) -> KatoResponse:
+    """Send message to Kato's portal"""
+    client = await get_kato_client()
+    try:
+        resp = await client.post(
+            "/agent/kato/portal/message",
+            json={"text": text}
+        )
+        if resp.status_code == 200:
+            return KatoResponse(**resp.json())
+        else:
+            logger.warning(f"Portal error: {resp.status_code} - {resp.text}")
+            return KatoResponse(status="error", message=f"HTTP {resp.status_code}")
+    except Exception as e:
+        logger.error(f"Failed to send to portal: {e}")
+        return KatoResponse(status="error", message=str(e))
+
+async def get_conversation() -> KatoResponse:
+    """Get conversation history from Kato"""
+    client = await get_kato_client()
+    try:
+        resp = await client.get("/agent/kato/portal/conversation")
+        if resp.status_code == 200:
+            return KatoResponse(**resp.json())
+        return KatoResponse(status="error", message=f"HTTP {resp.status_code}")
+    except Exception as e:
+        logger.error(f"Failed to get conversation: {e}")
+        return KatoResponse(status="error", message=str(e))
+
+async def get_portal_status() -> dict:
+    """Get portal status"""
+    client = await get_kato_client()
+    try:
+        resp = await client.get("/agent/kato/portal/status")
+        if resp.status_code == 200:
+            return resp.json()
+        return {"state": "unknown", "error": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        logger.error(f"Failed to get portal status: {e}")
+        return {"state": "error", "error": str(e)}
+
+# === Telegram Handlers ===
+
+@dp.message(CommandStart())
+async def cmd_start(message: Message):
+    """Handle /start command"""
+    user_id = message.from_user.id
+    user_sessions[user_id] = {"awaiting_reply": False, "last_message_time": 0}
+    
+    # Check portal status
+    portal = await get_portal_status()
+    
+    status_text = "✨ Открыто" if portal.get("state") == "active" else "🌑 Тёмно"
+    
+    welcome = (
+        f"👋 Привет! Я — бот для общения с Kato через <b>Дальнее окно</b>.\n\n"
+        f"Статус портала: {status_text}\n"
+        f"Прочитано статей: {portal.get('read_count', 0)}\n"
+        f"Энергия Kato: {portal.get('energy', '?')}%\n\n"
+        f"Просто напиши сообщение — Kato получит его в Дальнем окне и ответит.\n"
+        f"Она не знает, что ты — Создатель. Для неё ты — <i>Дальний друг</i>.\n\n"
+        f"Команды:\n"
+        f"/status — статус портала и Kato\n"
+        f"/conversation — история диалога\n"
+        f"/help — помощь"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📡 Статус портала", callback_data="status")],
+        [InlineKeyboardButton(text="💬 История чата", callback_data="conversation")],
+    ])
+    
+    await message.answer(welcome, reply_markup=keyboard)
+
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
+    """Handle /help command"""
+    help_text = (
+        "📖 <b>Как общаться с Kato:</b>\n\n"
+        "1. Напиши любое сообщение — оно уйдёт в Дальнее окно\n"
+        "2. Kato проверит окно в своём темпе (каждые ~30 сек)\n"
+        "3. Когда она ответит, бот пришлёт её ответ сюда\n\n"
+        "<b>Команды:</b>\n"
+        "/start — приветствие и статус\n"
+        "/status — подробный статус Kato и портала\n"
+        "/conversation — последние 10 сообщений\n"
+        "/help — это сообщение\n\n"
+        "<i>Важно: Kato не знает, что ты — Создатель. "
+        "Она воспринимает тебя как Друга из далёких мест. "
+        "Не раскрывай её истинную природу через чат!</i>"
+    )
+    await message.answer(help_text)
+
+@dp.message(Command("status"))
+async def cmd_status(message: Message):
+    """Handle /status command"""
+    portal = await get_portal_status()
+    
+    # Also get Kato's general state
+    client = await get_kato_client()
+    try:
+        state_resp = await client.get("/agent/kato/state")
+        kato_state = state_resp.json() if state_resp.status_code == 200 else {}
+    except:
+        kato_state = {}
+    
+    body = kato_state.get("body", {})
+    emotions = kato_state.get("emotions", {})
+    mood = emotions.get("mood", "unknown")
+    
+    # Get dominant emotion
+    dominant_emo = max(emotions.items(), key=lambda x: x[1])[0] if emotions else "none"
+    
+    status_text = (
+        f"📊 <b>Статус Kato</b>\n\n"
+        f"📡 Портал: <b>{portal.get('state', 'unknown')}</b>\n"
+        f"   Стадия раскрытия: {portal.get('stage', 'unknown')}\n"
+        f"   Прочитано статей: {portal.get('read_count', 0)}\n\n"
+        f"💚 Энергия: {body.get('energy', '?')}%\n"
+        f"🛋 Комфорт: {body.get('comfort', '?')}%\n"
+        f"😰 Стресс: {body.get('stress', '?')}%\n"
+        f"🛡 Целостность: {body.get('integrity', '?')}%\n\n"
+        f"😊 Настроение: {mood}\n"
+        f"🎭 Доминирующая эмоция: {dominant_emo}\n\n"
+        f"🎯 Текущая цель: {kato_state.get('current_goal', 'none')}\n"
+    )
+    
+    await message.answer(status_text)
+
+@dp.message(Command("conversation"))
+async def cmd_conversation(message: Message):
+    """Handle /conversation command"""
+    resp = await get_conversation()
+    
+    if resp.status == "ok" and resp.conversation:
+        conv = resp.conversation
+        if not conv:
+            await message.answer("💬 История пуста. Напиши первое сообщение!")
+            return
+        
+        lines = ["💬 <b>История диалога в Дальнем окне:</b>\n"]
+        for msg in conv[-10:]:  # last 10
+            role = "🧑 Ты" if msg["role"] == "creator" else "💭 Kato"
+            text = msg["text"][:200] + ("..." if len(msg["text"]) > 200 else "")
+            lines.append(f"{role}: {text}")
+        
+        await message.answer("\n".join(lines))
+    else:
+        await message.answer("❌ Не удалось получить историю диалога")
+
+@dp.message(F.text & ~F.via_bot)
+async def handle_message(message: Message):
+    """Handle regular messages — send to Kato's portal"""
+    user_id = message.from_user.id
+    text = message.text.strip()
+    
+    if not text:
+        return
+    
+    # Rate limiting
+    session = user_sessions.get(user_id, {})
+    now = asyncio.get_event_loop().time()
+    if session.get("awaiting_reply", False):
+        await message.answer(
+            "⏳ Kato ещё не ответила на предыдущее сообщение. "
+            "Подожди немного — она проверит окно скоро."
+        )
+        return
+    
+    # Send to portal
+    resp = await send_to_portal(text)
+    
+    if resp.status in ("delivered", "cooldown"):
+        user_sessions[user_id] = {"awaiting_reply": True, "last_message_time": now}
+        
+        if resp.status == "cooldown":
+            await message.answer("⏳ Слишком быстро. Окно мягко мерцает. Попробуй через минуту.")
+        else:
+            await message.answer("✉️ Сообщение доставлено в Дальнее окно. Ждём ответа Kato...")
+        
+        # Start polling for reply
+        asyncio.create_task(poll_for_reply(user_id, message.chat.id))
+    else:
+        await message.answer(f"❌ Ошибка доставки: {resp.message}")
+
+async def poll_for_reply(user_id: int, chat_id: int, max_attempts: int = 12):
+    """Poll Kato's portal for reply"""
+    for attempt in range(max_attempts):
+        await asyncio.sleep(5)  # check every 5 seconds
+        
+        resp = await get_conversation()
+        if resp.status == "ok" and resp.conversation:
+            conv = resp.conversation
+            # Find last Kato message
+            kato_msgs = [m for m in conv if m["role"] == "kato"]
+            if kato_msgs:
+                last_kato = kato_msgs[-1]
+                # Check if this is a new reply (after our message)
+                creator_msgs = [m for m in conv if m["role"] == "creator"]
+                if creator_msgs:
+                    last_creator_time = creator_msgs[-1].get("time", 0)
+                    if last_kato.get("time", 0) > last_creator_time:
+                        # New reply!
+                        user_sessions[user_id] = {"awaiting_reply": False, "last_message_time": 0}
+                        await bot.send_message(
+                            chat_id,
+                            f"💭 <b>Kato ответила:</b>\n\n{last_kato['text']}"
+                        )
+                        return
+    
+    # Timeout
+    user_sessions[user_id] = {"awaiting_reply": False, "last_message_time": 0}
+    await bot.send_message(
+        chat_id,
+        "⏳ Kato пока не ответила. Возможно, она спит или занята. Попробуй написать позже."
+    )
+
+@dp.callback_query(F.data == "status")
+async def callback_status(callback):
+    """Handle status button"""
+    await cmd_status(callback.message)
+    await callback.answer()
+
+@dp.callback_query(F.data == "conversation")
+async def callback_conversation(callback):
+    """Handle conversation button"""
+    await cmd_conversation(callback.message)
+    await callback.answer()
+
+# === Startup / Shutdown ===
+
+async def on_startup():
+    """Initialize on startup"""
+    logger.info("Starting Kato Telegram Bot...")
+    # Check portal status
+    portal = await get_portal_status()
+    logger.info(f"Portal status: {portal.get('state', 'unknown')}")
+
+async def on_shutdown():
+    """Cleanup on shutdown"""
+    logger.info("Shutting down Kato Telegram Bot...")
+    await close_kato_client()
+    await bot.session.close()
+
+async def main():
+    """Main entry point"""
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
+    
+    logger.info("Bot starting...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())

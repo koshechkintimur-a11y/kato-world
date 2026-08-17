@@ -47,3 +47,8 @@ def learn_from_action(agent_id: str, result) -> None:
         agent["hormones"]["reward"] = min(100.0, agent["hormones"]["reward"] + 5.0)
     else:
         agent["hormones"]["stress"] = min(100.0, agent["hormones"]["stress"] + 10.0)
+
+
+def create_learning_module(agent_id: str):
+    """Factory for learning module (stateless, returns function reference)"""
+    return {"learn_from_action": learn_from_action, "agent_id": agent_id}
