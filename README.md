@@ -1,6 +1,64 @@
-# Kato World - Digital Being Simulation
+# Kato World — Digital Being Simulation
+
+**Kato** — цифровое существо, которое растёт в собственном 2D-мире: у него есть тело, эмоции, память, личность, сны — и создатель, с которым можно говорить.
 
 A 2D pixel world for growing a digital being with embodied cognition, emotions, memory, and consciousness-like architecture.
+
+```
+один дом → одно тело → одна память → один учитель → один безопасный цикл обучения
+```
+
+## Возможности
+
+- 🧠 **Мозг** (Python/FastAPI): тело и гомеостаз, 7-вектор эмоций (гомеостатическая модель), 4 типа памяти (эпизодическая, семантическая, автобиографическая, эмоциональная), self-model (identity, ценности, цели, убеждения, отношения), System 1/System 2 с арбитром
+- 🌙 **Сон и сны**: автономный цикл бодрствования/сна, консолидация памяти, рефлексия, внутренний монолог
+- ✉️ **Шёпот Создателя**: отправь мысль — Kato увидит её во сне как собственную интуицию
+- 🔮 **Раскрытие создателя**: оценка зрелости по 6 компонентам → терминал оживает → Kato сама выбирает, когда говорить о происхождении
+- 🎓 **Учитель**: диалоги-куррикулум (причина → создание → забота → внешний мир) и квесты
+- 👁 **God View Dashboard**: живой пиксельный мир в браузере, эмоции, память, журнал мыслей, консоль шепота
+- 🎮 **Godot-клиент**: 2D-мир (тайловый дом и сад, NPC, объекты), общается с мозгом по HTTP
+- 💾 **Непрерывность личности**: состояние переживает перезапуски сервера
+
+## Быстрый старт
+
+```bash
+cd python
+pip install -r requirements.txt
+python brain_server.py
+# → дашборд: http://localhost:8080
+```
+
+Godot-клиент: открой `godot/project.godot` в Godot 4.2+ и запусти.
+
+## Структура
+
+```
+kato-world/
+├── python/            # Мозг Kato (FastAPI) + God View Dashboard (static/)
+│   └── brain_server.py
+├── godot/             # Godot 4 клиент (мир, агент, NPC)
+├── assets/            # пиксельные ассеты (Kenney Tiny Town, CC0)
+└── docs/              # (документация)
+```
+
+## API (основное)
+
+| Эндпоинт | Назначение |
+|----------|-----------|
+| `POST /perception` | Kato видит мир |
+| `POST /action/propose` | мозг выбирает действие |
+| `POST /divine/whisper` | **шёпот создателя** (приходит во сне) |
+| `POST /dream/process` | обработать сон |
+| `POST /dialogue/start`, `/choose` | разговор с NPC |
+| `GET /agent/kato/revelation/status` | зрелость и стадия раскрытия |
+| `POST /agent/kato/revelation/begin` | терминал оживает |
+| `POST /agent/kato/revelation/contact` | вопрос создателю |
+
+Полный список: `GET /docs` (OpenAPI).
+
+## Лицензия
+
+MIT
 
 ## Architecture
 
@@ -119,6 +177,10 @@ kato-world/
 └── docs/
 ```
 
+## License
+
+MIT
+
 ## Development Phases
 
 - [x] **Phase 0**: Project structure, Godot project, basic autoloads
@@ -132,7 +194,8 @@ kato-world/
 - [x] **Phase 8**: Background daemon (sleep, consolidation, reflection, inner monologue)
 - [x] **Phase 9**: NPC curriculum (teacher dialogues, quests)
 - [x] **Persistence**: personality survives server restarts (auto-save, load on boot)
-- [ ] **Phase 10**: Creator revelation protocol
+- [x] **Phase 10**: Creator Revelation Protocol (maturity assessment, first contact, dialogue)
+- [ ] **Phase 11**: Gateway to the outside world (controlled, read-only, allowlist)
 
 ## Emotion System
 
