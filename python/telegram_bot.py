@@ -19,9 +19,12 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 # Configuration
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "REDACTED")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 KATO_API_URL = os.environ.get("KATO_API_URL", "http://127.0.0.1:8080")
 KATO_API_TOKEN = os.environ.get("KATO_API_TOKEN", "")
+
+if not TELEGRAM_BOT_TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required but not set")
 
 # Setup logging
 logging.basicConfig(
