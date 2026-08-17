@@ -128,9 +128,10 @@ kato-world/
 - [x] **Phase 4**: Divine Whisper Gateway (dream integration)
 - [x] **Phase 5**: Memory systems (episodic, semantic, autobiographical, emotional)
 - [x] **Phase 6**: Emotion system (7-vector, mood/VAD, salience modulation, behavior drive)
-- [ ] **Phase 7**: Self-model (identity, values, goals, beliefs, relationships)
-- [ ] **Phase 8**: Background daemon (sleep, consolidation, reflection)
-- [ ] **Phase 9**: NPC curriculum (teacher, gardener, librarian, mirror keeper)
+- [x] **Phase 7**: Self-model (identity, values, goals, beliefs, relationships)
+- [x] **Phase 8**: Background daemon (sleep, consolidation, reflection, inner monologue)
+- [x] **Phase 9**: NPC curriculum (teacher dialogues, quests)
+- [x] **Persistence**: personality survives server restarts (auto-save, load on boot)
 - [ ] **Phase 10**: Creator revelation protocol
 
 ## Emotion System
