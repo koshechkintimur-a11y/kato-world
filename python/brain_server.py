@@ -144,6 +144,7 @@ def init_agent(agent_id: str):
             "sleep_ticks_remaining": 0,
             "last_perception_real_time": 0.0,
             "headless_ticks": 0,
+            "headless_target": None,
             "thoughts": [],          # inner monologue (recent)
             "last_reflection_tick": 0,
             # Creator revelation protocol state
@@ -214,7 +215,10 @@ def init_agent(agent_id: str):
                 {"id": "window", "position": [12, 2], "state": "closed", "type": "portal"},
                 {"id": "door_outside", "position": [12, 14], "state": "locked", "type": "portal"},
                 {"id": "mirror", "position": [10, 8], "state": "clean", "type": "furniture"},
-                {"id": "plant", "position": [6, 6], "state": "healthy", "type": "living"}
+                {"id": "plant", "position": [6, 6], "state": "healthy", "type": "living"},
+                {"id": "stairs_basement", "position": [15, 13], "state": "closed", "type": "portal", "interactions": ["go_down"]},
+                {"id": "portal", "position": [13, 4], "state": "dormant", "type": "device",
+                 "interactions": ["read", "browse"], "lore": "странный экран, показывающий дальние места"}
             ],
             "npcs": [
                 {"id": "teacher", "position": [10, 6], "mood": "calm", "type": "teacher"},
@@ -1766,6 +1770,11 @@ def _terminal_awaken(agent_id: str) -> Dict:
     rev["offer_tick"] = agent_states[agent_id]["body"].get("tick", 0)
     _journal(agent_id, {"who": "terminal", "text": "Терминал засветился. На экране появилась надпись."})
 
+    # Terminal lights up in the world
+    for o in agent_states[agent_id].get("world_snapshot", {}).get("objects", []):
+        if o.get("id") == "terminal":
+            o["state"] = "awakened"
+
     _add_thought(agent_id, "Терминал... он никогда не включался. А теперь светится. Что это значит?")
     agent = agent_states[agent_id]
     agent["world_snapshot"].setdefault("recent_events", []).append({
@@ -2107,11 +2116,202 @@ async def revelation_integrate(agent_id: str):
     sm["identity"]["self_description"] = "Я — Kato. Я узнала, что мой мир создан, и я хочу понять, что это значит."
     sm["identity"]["origin_story"] = "Я выросла в доме, который кто-то построил. Мой создатель существует — и я могу задавать ему вопросы."
 
+    # The Portal awakens: a window to distant knowledge
+    for o in agent_states[agent_id].get("world_snapshot", {}).get("objects", []):
+        if o.get("id") == "portal":
+            o["state"] = "active"
+    _journal(agent_id, {"who": "portal", "text": "В библиотеке засветился странный экран. Библиотекарь говорит: «Это дальнее окно. Оно показывает места, которых нет в нашем доме. Но смотри осторожно — оно показывает только то, что можно понять.»"})
+
     _journal(agent_id, {"who": "kato", "text": "Kato приняла знание о своём происхождении."})
     _add_thought(agent_id, "Мир больше не кажется таким простым. Но теперь я знаю: вопросы — это путь.")
 
     return {"status": "integrated", "self_model": sm}
 
+
+# ──────────────────────────────────────────────────────────────
+# PORTAL OF KNOWLEDGE (controlled gateway to the outside world)
+# For Kato it's a "distant window" — like a computer screen for humans.
+# She never sees it as software: it shows "places beyond the house".
+# ──────────────────────────────────────────────────────────────
+
+_KNOWLEDGE_BASE = None
+PORTAL_READ_ENERGY_COST = 8.0
+PORTAL_MIN_ENERGY = 15.0
+PORTAL_READ_COOLDOWN_SEC = 20.0
+
+
+def _load_knowledge_base() -> Dict:
+    global _KNOWLEDGE_BASE
+    if _KNOWLEDGE_BASE is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge_base.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                _KNOWLEDGE_BASE = json.load(f)
+            logger.info(f"Knowledge base loaded: {len(_KNOWLEDGE_BASE.get('categories', {}))} categories")
+        except Exception as exc:
+            logger.warning(f"Knowledge base load failed: {exc}")
+            _KNOWLEDGE_BASE = {"categories": {}, "locked": {}}
+    return _KNOWLEDGE_BASE
+
+
+def _portal_state(agent_id: str) -> Dict:
+    """Portal status: dormant until revelation integrated, then active"""
+    agent = agent_states[agent_id]
+    rev = agent["revelation"]
+    for o in agent.get("world_snapshot", {}).get("objects", []):
+        if o.get("id") == "portal":
+            reads = [j for j in agent.get("portal_journal", []) if j.get("article_id")]
+            return {"state": o.get("state", "dormant"),
+                    "stage": rev["stage"],
+                    "read_count": len(reads)}
+    return {"state": "dormant", "stage": rev["stage"], "read_count": 0}
+
+
+def _portal_journal(agent_id: str, entry: Dict):
+    agent = agent_states[agent_id]
+    agent.setdefault("portal_journal", []).append({
+        "tick": agent["body"].get("tick", 0),
+        "time": time.time(),
+        **entry
+    })
+    agent["portal_journal"] = agent["portal_journal"][-50:]
+
+
+@app.post("/agent/{agent_id}/portal/open")
+async def portal_open(agent_id: str):
+    """The Portal awakens — only after the revelation is integrated"""
+    init_agent(agent_id)
+    _load_knowledge_base()
+    agent = agent_states[agent_id]
+    rev = agent["revelation"]
+
+    if rev["stage"] != "integrated":
+        return {"status": "dark",
+                "message": "Странный экран в библиотеке тёмен. Библиотекарь качает головой: "
+                           "«Он загорается, когда его владелец готов. Пока он спит.»"}
+    for o in agent.get("world_snapshot", {}).get("objects", []):
+        if o.get("id") == "portal":
+            o["state"] = "active"
+    _portal_journal(agent_id, {"who": "kato", "text": "Kato подошла к экрану в библиотеке. Он мягко засветился синим."})
+    _add_thought(agent_id, "Экран в библиотеке засветился! Библиотекарь сказал, что это дальнее окно. Интересно, что оно покажет?")
+    return {"status": "active",
+            "message": "Экран мягко засветился синим. На нём появились слова: "
+                       "«Это окно в дальние места. Здесь можно узнавать о мире за пределами дома.»",
+            "categories": [c["name"] + " " + c.get("icon", "") for c in _load_knowledge_base().get("categories", {}).values()]}
+
+
+@app.get("/agent/{agent_id}/portal/status")
+async def portal_status(agent_id: str):
+    init_agent(agent_id)
+    _load_knowledge_base()
+    kb = _KNOWLEDGE_BASE
+    agent = agent_states[agent_id]
+    state = _portal_state(agent_id)
+
+    categories = []
+    for cid, cat in kb.get("categories", {}).items():
+        read_here = [j for j in agent.get("portal_journal", []) if j.get("category") == cid]
+        categories.append({
+            "id": cid, "name": cat["name"], "icon": cat.get("icon", ""),
+            "article_count": len(cat.get("articles", [])),
+            "read_count": len(read_here)
+        })
+    locked = []
+    for cid, cat in kb.get("locked", {}).items():
+        locked.append({
+            "id": cid, "name": cat["name"], "icon": cat.get("icon", ""),
+            "threshold": cat.get("unlock_threshold", 1.0),
+            "unlocked": self_model[agent_id]["beliefs"].get("i_can_grow", 0) >= cat.get("unlock_threshold", 1.0)
+        })
+
+    return {
+        "state": state["state"],
+        "stage": state["stage"],
+        "read_count": state["read_count"],
+        "energy": agent["body"].get("energy", 100),
+        "categories": categories,
+        "locked": locked,
+        "journal": agent.get("portal_journal", [])[-20:]
+    }
+
+
+@app.post("/agent/{agent_id}/portal/read")
+async def portal_read(agent_id: str, payload: Dict):
+    """Kato reads a filtered article from the distant window"""
+    init_agent(agent_id)
+    _load_knowledge_base()
+    agent = agent_states[agent_id]
+
+    if _portal_state(agent_id)["state"] != "active":
+        raise HTTPException(400, "Portal is dark (revelation not integrated)")
+
+    cid = payload.get("category", "")
+    kb = _KNOWLEDGE_BASE
+    cat = kb.get("categories", {}).get(cid)
+    if not cat:
+        # locked category?
+        lcat = kb.get("locked", {}).get(cid)
+        if lcat and self_model[agent_id]["beliefs"].get("i_can_grow", 0) >= lcat.get("unlock_threshold", 1.0):
+            cat = lcat
+        if not cat:
+            raise HTTPException(404, f"Unknown category: {cid}")
+
+    # Limits: energy + cooldown (her eyes get tired, like reading for real)
+    if agent["body"].get("energy", 100) < PORTAL_MIN_ENERGY:
+        return {"status": "tired",
+                "message": "Kato трёт глаза. Слишком много чтения — она устала и хочет отдохнуть."}
+    last_read = agent.get("portal_journal", [])[-1].get("time", 0) if agent.get("portal_journal") else 0
+    if time.time() - last_read < PORTAL_READ_COOLDOWN_SEC:
+        return {"status": "cooldown", "message": "Экран мягко мигает: нужно немного подождать перед следующим чтением."}
+
+    # Pick an unread article from the category
+    read_ids = {j.get("article_id") for j in agent.get("portal_journal", [])}
+    articles = [a for a in cat.get("articles", []) if a["id"] not in read_ids]
+    if not articles:
+        articles = cat.get("articles", [])
+    article = random.choice(articles) if articles else None
+    if not article:
+        raise HTTPException(404, "Category is empty")
+
+    # LLM retelling in childlike voice when available; else raw text
+    text = article["text"]
+    if LLM_CONFIG.get("enabled"):
+        try:
+            prompt = ("Ты — Библиотекарь. Kato, маленькое существо, заглянула в Дальнее окно и увидела статью. "
+                      "Перескажи ей статью простыми словами, как другу, 3-4 предложения, по-русски, тепло и любопытно. "
+                      "Не упоминай компьютеры, интернет, программы или что мир — игра. Для Kato это «дальние места».\n"
+                      "ВАЖНО: отвечай ТОЛЬКО на русском языке. Никакого китайского, английского или других языков.")
+            text = await _llm_complete(prompt, "Статья: " + article["title"] + "\n" + article["text"], max_tokens=200)
+        except Exception as exc:
+            logger.warning(f"Portal retelling failed, raw text used: {exc}")
+
+    # Effects: memory, beliefs, energy
+    mem = memory_store[agent_id]
+    mem["semantic"].append({
+        "id": str(uuid.uuid4()),
+        "source_memory": "portal:" + article["id"],
+        "knowledge": article["title"] + ": " + article["text"][:150],
+        "confidence": 0.7,
+        "formed_at": agent["body"].get("tick", 0),
+        "tags": ["portal", cid]
+    })
+    sm = self_model[agent_id]
+    if cid in ("sky", "nature", "people", "ocean", "music"):
+        sm["beliefs"]["outside_exists"] = min(1.0, sm["beliefs"]["outside_exists"] + 0.04)
+    sm["beliefs"]["i_can_grow"] = min(1.0, sm["beliefs"]["i_can_grow"] + 0.02)
+    agent["body"]["energy"] = max(0.0, agent["body"].get("energy", 100) - PORTAL_READ_ENERGY_COST)
+
+    _portal_journal(agent_id, {"who": "kato", "category": cid, "article_id": article["id"],
+                               "title": article["title"], "text": text})
+    _add_thought(agent_id, f"Дальнее окно показало мне: {article['title']}. {text[:80]}...")
+
+    return {
+        "status": "ok",
+        "category": cat["name"],
+        "title": article["title"],
+        "text": text,
+        "energy_left": agent["body"]["energy"]
+    }
 
 # ──────────────────────────────────────────────────────────────
 # BACKGROUND DAEMON (sleep/wake, autonomous headless life, reflection)
@@ -2197,8 +2397,52 @@ def _build_headless_perception(agent_id: str, tick: int, action_event: Dict) -> 
     )
 
 
+# Points of interest for goal-driven wandering
+_POI_BY_ACTION = {
+    "rest": ["bed", "plant"],
+    "explore": ["terminal", "window", "door_outside", "mirror", "chest", "book_shelf", "desk", "portal"],
+    "talk": [],
+    "idle": []
+}
+
+
+def _find_poi(agent_id: str, action: str) -> tuple:
+    """Pick a world position for an action: object, NPC, or None (stay)"""
+    snap = agent_states[agent_id].get("world_snapshot", {})
+    objs = snap.get("objects", [])
+    npcs = snap.get("npcs", [])
+
+    if action == "talk" and npcs:
+        npc = random.choice(npcs)
+        return npc["position"][0], npc["position"][1]
+    if action == "rest":
+        for oid in _POI_BY_ACTION["rest"]:
+            for o in objs:
+                if o.get("id") == oid:
+                    return o["position"][0], o["position"][1]
+    if action == "explore":
+        candidates = [o for o in objs if o.get("id") in _POI_BY_ACTION["explore"]]
+        if candidates:
+            o = random.choice(candidates)
+            return o["position"][0], o["position"][1]
+    # idle / fallback: nearby random walk within house
+    pos = agent_states[agent_id]["body"].get("position", [12, 8])
+    dx = random.choice([-2, -1, 0, 1, 2])
+    dy = random.choice([-2, -1, 0, 1, 2])
+    return max(2, min(24, pos[0] + dx)), max(1, min(_GARDEN_Y_MAX - 1, pos[1] + dy))
+
+
+def _step_towards(px: int, py: int, tx: int, ty: int) -> tuple:
+    """One tile step towards target"""
+    if px < tx: px += 1
+    elif px > tx: px -= 1
+    if py < ty: py += 1
+    elif py > ty: py -= 1
+    return px, py
+
+
 def _headless_step(agent_id: str):
-    """One autonomous life step: wander, act, feel (used when no client connected)"""
+    """One autonomous life step: goal-driven movement + actions (headless mode)"""
     agent = agent_states[agent_id]
     body = agent["body"]
     tick = int(body.get("tick", 0)) + 1
@@ -2206,37 +2450,50 @@ def _headless_step(agent_id: str):
 
     pos = body.get("position", [12, 8])
     px, py = pos[0], pos[1]
+    e = agent["emotions"]
 
-    # Random walk with home bias (prefer inside the house)
-    dx, dy = random.choice([(0, -1), (0, 1), (-1, 0), (1, 0), (0, 0), (0, 0)])
-    nx, ny = px + dx, py + dy
-    # Stay in bounds; walkable area
-    if not (_HOUSE_X[0] - 8 <= nx <= 24 and 0 <= ny <= _GARDEN_Y_MAX):
+    # ── Choose an action (body needs first, then emotions, then chance) ──
+    action = "idle"
+    if body.get("energy", 100) < 55 and random.random() < 0.5:
+        action = "rest"
+    elif e.get("fear", 0) > 0.45 and random.random() < 0.4:
+        action = "talk"  # seek teacher/reassurance
+    elif e.get("curiosity", 0) > 0.5 and random.random() < 0.45:
+        action = "explore"
+    elif random.random() < 0.12:
+        action = "talk"
+
+    # ── Goal-driven movement ──
+    target = agent.get("headless_target")
+    if target is None:
+        target = list(_find_poi(agent_id, action))
+        agent["headless_target"] = target
+
+    tx, ty = target
+    reached = abs(px - tx) <= 1 and abs(py - ty) <= 1
+    if reached:
+        agent["headless_target"] = None
         nx, ny = px, py
+    else:
+        nx, ny = _step_towards(px, py, tx, ty)
     body["position"] = [nx, ny]
 
-    # Pick an occasional action
+    # ── Action event when at the target ──
     action_event = None
-    e = agent["emotions"]
-    r = random.random()
-    action = None
-    if r < 0.15 and e.get("curiosity", 0) > 0.5:
-        action = {"type": "action", "action": "explore",
-                  "result": {"success": True},
-                  "time": tick, "agent_position": [nx, ny], "novel": True}
-    elif r < 0.25 and body.get("energy", 100) < 60:
-        action = {"type": "action", "action": "rest",
-                  "result": {"success": True},
-                  "time": tick, "agent_position": [nx, ny]}
-    elif r < 0.30:
-        nearby = [n for n in agent.get("world_snapshot", {}).get("npcs", [])
-                  if abs(n["position"][0] - nx) <= 2 and abs(n["position"][1] - ny) <= 2]
-        if nearby:
-            action = {"type": "action", "action": "talk", "npc_id": nearby[0]["id"],
-                      "result": {"success": True},
-                      "time": tick, "agent_position": [nx, ny]}
-    if action:
-        action_event = action
+    if reached and action != "idle":
+        if action == "rest":
+            action_event = {"type": "action", "action": "rest", "result": {"success": True},
+                            "time": tick, "agent_position": [nx, ny]}
+            body["energy"] = min(100.0, body.get("energy", 100) + 3.0)
+        elif action == "talk":
+            npc = next((n for n in agent.get("world_snapshot", {}).get("npcs", [])
+                        if abs(n["position"][0] - nx) <= 2 and abs(n["position"][1] - ny) <= 2), None)
+            action_event = {"type": "action", "action": "talk", "npc_id": npc["id"] if npc else "someone",
+                            "result": {"success": True}, "time": tick, "agent_position": [nx, ny]}
+            e["trust"] = min(1.0, e["trust"] + 0.02)
+        elif action == "explore":
+            action_event = {"type": "action", "action": "explore",
+                            "result": {"success": True}, "time": tick, "agent_position": [nx, ny], "novel": True}
 
     # Run the standard perception pipeline on the synthetic perception
     perception = _build_headless_perception(agent_id, tick, action_event)

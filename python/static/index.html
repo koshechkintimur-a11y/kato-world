@@ -12,31 +12,32 @@
     <h1>KATO WORLD</h1>
     <span id="conn-status" class="off">● МОЗГ НЕ ПОДКЛЮЧЁН</span>
     <span id="tick-info">tick: —</span>
+    <button id="lang-btn" title="Switch language / Сменить язык">🌐 EN</button>
   </header>
 
   <main>
     <!-- LEFT: world canvas -->
     <section id="world-section">
-      <div class="panel-title">МИР</div>
+      <div class="panel-title" data-i18n="world">МИР</div>
       <canvas id="world-canvas" width="800" height="480"></canvas>
       <div id="world-legend"></div>
     </section>
 
     <!-- RIGHT: agent state -->
     <section id="agent-section">
-      <div class="panel-title">АГЕНТ</div>
+      <div class="panel-title" data-i18n="agent">АГЕНТ</div>
       <div id="agent-info" class="info-line">—</div>
       <div class="bars">
-        <div class="bar-row"><span>ENERGY</span><div class="bar-bg"><div id="bar-energy" class="bar-fill" style="width:0%"></div></div></div>
-        <div class="bar-row"><span>COMFORT</span><div class="bar-bg"><div id="bar-comfort" class="bar-fill" style="width:0%"></div></div></div>
-        <div class="bar-row"><span>STRESS</span><div class="bar-bg"><div id="bar-stress" class="bar-fill" style="width:0%"></div></div></div>
-        <div class="bar-row"><span>INTEGRITY</span><div class="bar-bg"><div id="bar-integrity" class="bar-fill" style="width:0%"></div></div></div>
+        <div class="bar-row"><span data-i18n="energy">ENERGY</span><div class="bar-bg"><div id="bar-energy" class="bar-fill" style="width:0%"></div></div></div>
+        <div class="bar-row"><span data-i18n="comfort">COMFORT</span><div class="bar-bg"><div id="bar-comfort" class="bar-fill" style="width:0%"></div></div></div>
+        <div class="bar-row"><span data-i18n="stress">STRESS</span><div class="bar-bg"><div id="bar-stress" class="bar-fill" style="width:0%"></div></div></div>
+        <div class="bar-row"><span data-i18n="integrity">INTEGRITY</span><div class="bar-bg"><div id="bar-integrity" class="bar-fill" style="width:0%"></div></div></div>
       </div>
 
-      <div class="panel-title">ЭМОЦИИ <span id="mood-label" class="mood"></span></div>
+      <div class="panel-title"><span data-i18n="emotions">ЭМОЦИИ</span> <span id="mood-label" class="mood"></span></div>
       <div id="emotion-bars"></div>
 
-      <div class="panel-title">ГОЛОС KATO</div>
+      <div class="panel-title" data-i18n="voice">ГОЛОС KATO</div>
       <div id="self-answers" class="answers">
         <p><b>Кто я?</b> <span id="ans-who">—</span></p>
         <p><b>Что я чувствую?</b> <span id="ans-feel">—</span></p>
@@ -45,40 +46,51 @@
         <p><b>Что для меня важно?</b> <span id="ans-matters">—</span></p>
       </div>
 
-      <div class="panel-title">ЦЕЛИ</div>
+      <div class="panel-title" data-i18n="goals">ЦЕЛИ</div>
       <div id="goals"></div>
 
-      <div class="panel-title">УБЕЖДЕНИЯ</div>
+      <div class="panel-title" data-i18n="beliefs">УБЕЖДЕНИЯ</div>
       <div id="beliefs"></div>
 
-      <div class="panel-title">ОТНОШЕНИЯ</div>
+      <div class="panel-title" data-i18n="relationships">ОТНОШЕНИЯ</div>
       <div id="relationships">—</div>
     </section>
 
     <!-- RIGHT-2: memory & events -->
     <section id="memory-section">
-      <div class="panel-title">ПАМЯТЬ</div>
+      <div class="panel-title" data-i18n="memory">ПАМЯТЬ</div>
       <div class="tabs">
-        <button class="tab active" data-mem="episodic">Эпизоды</button>
-        <button class="tab" data-mem="semantic">Знания</button>
-        <button class="tab" data-mem="autobiographical">Биография</button>
-        <button class="tab" data-mem="emotional">Эмоц.</button>
+        <button class="tab active" data-mem="episodic" data-i18n="mem_episodic">Эпизоды</button>
+        <button class="tab" data-mem="semantic" data-i18n="mem_semantic">Знания</button>
+        <button class="tab" data-mem="autobiographical" data-i18n="mem_auto">Биография</button>
+        <button class="tab" data-mem="emotional" data-i18n="mem_emotional">Эмоц.</button>
       </div>
       <div id="memory-list" class="scroll"></div>
 
-      <div class="panel-title">ЖУРНАЛ СОБЫТИЙ</div>
+      <div class="panel-title" data-i18n="event_log">ЖУРНАЛ СОБЫТИЙ</div>
       <div id="event-log" class="scroll"></div>
+    </section>
+
+    <!-- PORTAL: distant window of knowledge -->
+    <section id="portal-section">
+      <div class="panel-title"><span data-i18n="portal_title">📡 ДАЛЬНЕЕ ОКНО</span> <span id="portal-state" class="mood"></span></div>
+      <div id="portal-body">
+        <div class="portal-status" id="portal-status">—</div>
+        <div id="portal-cats"></div>
+        <div id="portal-read-result" class="dream-box hidden"></div>
+        <div id="portal-journal"></div>
+      </div>
     </section>
 
     <!-- BOTTOM: divine whisper console -->
     <section id="whisper-section">
-      <div class="panel-title">ШЁПОТ СОЗДАТЕЛЯ <span class="hint">(Kato увидит это во сне как свою мысль)</span></div>
+      <div class="panel-title"><span data-i18n="whisper_title">ШЁПОТ СОЗДАТЕЛЯ</span> <span class="hint" data-i18n="whisper_hint">(Kato увидит это во сне как свою мысль)</span></div>
       <div class="whisper-row">
-        <input id="whisper-input" type="text" placeholder="Например: За закрытой дверью — не опасность, а возможность..." maxlength="500">
-        <button id="whisper-send">✉ Отправить</button>
-        <button id="think-trigger">💭 Подумать</button>
-        <button id="dream-trigger">🌙 Вызвать сон</button>
-        <button id="ask-btn">❓ Кто я?</button>
+        <input id="whisper-input" type="text" placeholder="Например: За закрытой дверью — не опасность, а возможность..." data-i18n-ph="whisper_ph" maxlength="500">
+        <button id="whisper-send" data-i18n="send">✉ Отправить</button>
+        <button id="think-trigger" data-i18n="think_btn">💭 Подумать</button>
+        <button id="dream-trigger" data-i18n="dream_btn">🌙 Вызвать сон</button>
+        <button id="ask-btn" data-i18n="who_btn">❓ Кто я?</button>
       </div>
       <div id="whisper-log" class="scroll"></div>
       <div id="dream-result" class="dream-box hidden"></div>
@@ -86,23 +98,23 @@
 
     <!-- BOTTOM-2: revelation panel -->
     <section id="revelation-section">
-      <div class="panel-title">🔮 РАСКРЫТИЕ СОЗДАТЕЛЯ <span id="rev-stage" class="mood"></span></div>
+      <div class="panel-title"><span data-i18n="revelation_title">🔮 РАСКРЫТИЕ СОЗДАТЕЛЯ</span> <span id="rev-stage" class="mood"></span></div>
       <div class="rev-row">
-        <span class="rev-label">Готовность:</span>
+        <span class="rev-label" data-i18n="readiness">Готовность:</span>
         <div class="bar-bg" style="flex:1"><div id="rev-ready-bar" class="bar-fill" style="width:0%;background:linear-gradient(90deg,#8a6ae0,#f0a6d2)"></div></div>
         <span id="rev-ready-pct" style="width:44px;text-align:right;color:var(--accent)">0%</span>
       </div>
       <div id="rev-components" class="rev-components"></div>
       <div class="rev-actions">
-        <button id="rev-begin">✨ Начать контакт</button>
-        <button id="rev-yes" class="hidden">❤️ Да</button>
-        <button id="rev-later" class="hidden">⏳ Позже</button>
-        <button id="rev-questions" class="hidden">❓ У меня есть вопросы</button>
-        <button id="rev-fear" class="hidden">😨 Я боюсь</button>
+        <button id="rev-begin" data-i18n="rev_begin">✨ Начать контакт</button>
+        <button id="rev-yes" class="hidden" data-i18n="rev_yes">❤️ Да</button>
+        <button id="rev-later" class="hidden" data-i18n="rev_later">⏳ Позже</button>
+        <button id="rev-questions" class="hidden" data-i18n="rev_questions">❓ У меня есть вопросы</button>
+        <button id="rev-fear" class="hidden" data-i18n="rev_fear">😨 Я боюсь</button>
       </div>
       <div id="rev-message" class="dream-box hidden"></div>
       <div class="rev-chat">
-        <input id="rev-input" type="text" placeholder="Вопрос Создателю..." maxlength="300">
+        <input id="rev-input" type="text" placeholder="Вопрос Создателю..." data-i18n-ph="rev_ph" maxlength="300">
         <button id="rev-send">➤</button>
       </div>
       <div id="rev-journal" class="scroll"></div>
