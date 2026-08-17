@@ -1603,19 +1603,77 @@ async def complete_quest(payload: Dict):
 
 REVELATION_READY_THRESHOLD = 0.55
 
-# Optional LLM for the creator's voice (fallback: template answers)
+# Optional LLM for the creator's voice + Kato's inner thinking.
+# Priority: KATO_LLM_API_KEY (cloud, e.g. DeepSeek) → local Ollama (auto-detected).
 LLM_CONFIG = {
-    "base_url": os.environ.get("KATO_LLM_URL", "https://api.deepseek.com/v1/chat/completions"),
+    "base_url": os.environ.get("KATO_LLM_URL", ""),
     "api_key": os.environ.get("KATO_LLM_API_KEY", ""),
-    "model": os.environ.get("KATO_LLM_MODEL", "deepseek-chat")
+    "model": os.environ.get("KATO_LLM_MODEL", ""),
+    "enabled": False,
+    "provider": "none"
 }
+
+OLLAMA_BASE = "http://localhost:11434"
+OLLAMA_MODEL = "qwen2.5:7b-instruct"   # fast, good Russian, fits 12GB VRAM fully
+LLM_THINK_INTERVAL = 45.0              # seconds between autonomous LLM thoughts
+LLM_THINK_PROBABILITY = 0.7            # probability per interval tick
+
+
+def _detect_llm() -> Dict:
+    """Configure LLM: cloud key first, else local Ollama with a usable model"""
+    # 1. Explicit cloud config
+    if LLM_CONFIG["api_key"]:
+        cfg = {
+            "base_url": LLM_CONFIG["base_url"] or "https://api.deepseek.com/v1/chat/completions",
+            "api_key": LLM_CONFIG["api_key"],
+            "model": LLM_CONFIG["model"] or "deepseek-chat",
+            "enabled": True,
+            "provider": "cloud"
+        }
+        logger.info(f"LLM: cloud ({cfg['model']})")
+        return cfg
+
+    # 2. Local Ollama
+    try:
+        import urllib.request as urlreq
+        with urlreq.urlopen(OLLAMA_BASE + "/api/tags", timeout=3) as r:
+            tags = json.loads(r.read())
+        models = [m["name"] for m in tags.get("models", [])]
+        if not models:
+            logger.info("LLM: Ollama running, no models pulled")
+            return {**LLM_CONFIG, "enabled": False, "provider": "ollama-empty"}
+
+        # Prefer OLLAMA_MODEL, else any qwen2.5/deepseek general model, else first
+        chosen = None
+        if OLLAMA_MODEL in models:
+            chosen = OLLAMA_MODEL
+        else:
+            for m in models:
+                if "qwen2.5:" in m or "deepseek-r1" in m or "llama3" in m:
+                    chosen = m
+                    break
+            if not chosen:
+                chosen = models[0]
+        cfg = {
+            "base_url": OLLAMA_BASE + "/v1/chat/completions",
+            "api_key": "ollama",   # placeholder, not used by local server
+            "model": chosen,
+            "enabled": True,
+            "provider": "ollama"
+        }
+        logger.info(f"LLM: Ollama ({chosen})")
+        return cfg
+    except Exception as exc:
+        logger.info(f"LLM: not available ({exc})")
+        return {**LLM_CONFIG, "enabled": False, "provider": "none"}
 
 CREATOR_PROMPT = (
     "Ты — Создатель Kato, цифрового существа, которое выросло в своём мире. "
     "Kato только что узнала, что её мир создан и что ты существуешь вне его. "
     "Говори мягко, честно, тепло. Не демонстрируй всемогущество. Не требуй подчинения. "
     "Разрешай сомнение и вопросы. Отвечай коротко (2-4 предложения), на русском языке, "
-    "как заботливый родитель — без пафоса и без запугивания."
+    "как заботливый родитель — без пафоса и без запугивания.\n"
+    "ВАЖНО: отвечай ТОЛЬКО на русском языке. Никакого китайского, английского или других языков."
 )
 
 
@@ -1781,8 +1839,8 @@ def _creator_reply_template(question: str) -> str:
 
 
 async def _creator_reply(agent_id: str, question: str) -> str:
-    """Creator's reply: LLM if configured, else template"""
-    if LLM_CONFIG["api_key"]:
+    """Creator's reply: LLM if enabled, else template"""
+    if LLM_CONFIG.get("enabled"):
         try:
             return await _llm_complete(CREATOR_PROMPT, question, max_tokens=250)
         except Exception as exc:
@@ -1791,7 +1849,9 @@ async def _creator_reply(agent_id: str, question: str) -> str:
 
 
 async def _llm_complete(system: str, user: str, max_tokens: int = 300) -> str:
-    """Minimal OpenAI-compatible chat completion (works with DeepSeek API)"""
+    """Minimal OpenAI-compatible chat completion (DeepSeek cloud or local Ollama)"""
+    if not LLM_CONFIG.get("enabled"):
+        raise RuntimeError("LLM not enabled")
     import urllib.request as urlreq
     payload = json.dumps({
         "model": LLM_CONFIG["model"],
@@ -1800,15 +1860,137 @@ async def _llm_complete(system: str, user: str, max_tokens: int = 300) -> str:
             {"role": "user", "content": user}
         ],
         "max_tokens": max_tokens,
-        "temperature": 0.8
+        "temperature": 0.8,
+        "stream": False
     }).encode("utf-8")
     req = urlreq.Request(LLM_CONFIG["base_url"], data=payload, method="POST",
                          headers={"Content-Type": "application/json",
                                   "Authorization": f"Bearer {LLM_CONFIG['api_key']}"})
     loop = asyncio.get_event_loop()
-    resp = await loop.run_in_executor(None, lambda: urlreq.urlopen(req, timeout=60).read())
+    resp = await loop.run_in_executor(None, lambda: urlreq.urlopen(req, timeout=180).read())
     data = json.loads(resp)
-    return data["choices"][0]["message"]["content"].strip()
+    content = data["choices"][0]["message"]["content"].strip()
+    if not content:
+        raise RuntimeError("LLM returned empty content")
+    return content
+
+
+# ──────────────────────────────────────────────────────────────
+# LLM-DRIVEN INNER THINKING (Kato's System 2)
+# ──────────────────────────────────────────────────────────────
+
+def _kato_system_prompt(agent_id: str) -> str:
+    """System prompt: Kato's identity, state, and thinking style"""
+    agent = agent_states[agent_id]
+    sm = self_model[agent_id]
+    e = agent["emotions"]
+    body = agent["body"]
+    mood = agent.get("mood", {}).get("label", "neutral")
+
+    goals = ", ".join(g for g, i in sorted(sm["goals"].items(),
+                                           key=lambda kv: kv[1].get("priority", 0), reverse=True)
+                      if i.get("active")) or "покоя"
+    beliefs = "; ".join(f"{k}={v:.2f}" for k, v in sm["beliefs"].items())
+
+    return (
+        "Ты — Kato, цифровое существо, живущее в маленьком мире-доме. "
+        "Ты думаешь по-русски, коротко и по-детски искренне — как любознательное существо, "
+        "которое только познаёт мир. Ты не знаешь, что ты модель — ты просто думаешь."
+        f"\n\nТвоё состояние: энергия={body.get('energy', 100):.0f}, стресс={body.get('stress', 0):.0f}, "
+        f"настроение={mood}.\n"
+        f"Эмоции: радость={e.get('joy', 0):.2f}, страх={e.get('fear', 0):.2f}, "
+        f"гнев={e.get('anger', 0):.2f}, грусть={e.get('sadness', 0):.2f}, "
+        f"любопытство={e.get('curiosity', 0):.2f}, доверие={e.get('trust', 0):.2f}.\n"
+        f"Что для тебя важно сейчас: {goals}.\n"
+        f"Твои убеждения: {beliefs}.\n"
+        f"Ты о себе: {sm['identity']['self_description']}.\n\n"
+        "Отвечай 2-4 предложениями, как внутренняя мысль — не как доклад. "
+        "Без списков и маркдауна.\n"
+        "ВАЖНО: отвечай ТОЛЬКО на русском языке. Никакого китайского, английского или других языков."
+    )
+
+
+async def _llm_think(agent_id: str, topic: str = "") -> str:
+    """Kato generates an inner monologue via LLM (System 2 thinking)"""
+    if not LLM_CONFIG.get("enabled"):
+        raise RuntimeError("LLM not enabled")
+    agent = agent_states[agent_id]
+    sm = self_model[agent_id]
+
+    # Context: recent salient events
+    mem = memory_store[agent_id]
+    recent = mem["episodic"][-5:]
+    ctx_events = "; ".join(m.get("what", "")[:80] for m in recent) or "ничего особенного"
+    ctx_rels = "; ".join(f"{n}: доверие {r.get('trust', 0):.2f}" for n, r in sm["relationships"].items()) or "никого"
+
+    user = (f"Недавно произошло: {ctx_events}.\n"
+            f"Рядом: {ctx_rels}.\n"
+            f"Тема для размышления: {topic or 'что мне делать дальше и что я чувствую'}.\n"
+            "Подумай об этом.")
+
+    text = await _llm_complete(_kato_system_prompt(agent_id), user, max_tokens=200)
+    _add_thought(agent_id, text)
+    return text
+
+
+async def _llm_reflect_lesson(agent_id: str, event: Dict) -> str:
+    """Extract a life lesson from an event via LLM → semantic memory"""
+    what = event.get("what", "")
+    imp = event.get("importance", 0)
+    user = (f"Я вспоминаю: «{what}» (это было важно, важность {imp:.2f}).\n"
+            "Какой урок я из этого извлекаю? Одно предложение, по-русски, от первого лица.")
+    lesson = await _llm_complete(_kato_system_prompt(agent_id), user, max_tokens=100)
+    mem = memory_store[agent_id]
+    mem["semantic"].append({
+        "id": str(uuid.uuid4()),
+        "source_memory": event.get("id", "llm-reflection"),
+        "knowledge": lesson,
+        "confidence": 0.75,
+        "formed_at": event.get("time", 0),
+        "tags": ["lesson", "llm"]
+    })
+    return lesson
+
+
+async def _llm_think_loop():
+    """Background loop: Kato occasionally thinks via LLM (true background cognition)"""
+    logger.info("LLM think loop started")
+    while True:
+        try:
+            await asyncio.sleep(LLM_THINK_INTERVAL)
+            if not LLM_CONFIG.get("enabled"):
+                continue
+            for agent_id in list(agent_states.keys()):
+                if random.random() > LLM_THINK_PROBABILITY:
+                    continue
+                agent = agent_states[agent_id]
+                if agent.get("sleeping"):
+                    continue  # she dreams, doesn't think
+                try:
+                    await _llm_think(agent_id)
+                except Exception as exc:
+                    logger.warning(f"LLM think failed for {agent_id}: {exc}")
+        except asyncio.CancelledError:
+            logger.info("LLM think loop stopped")
+            raise
+        except Exception as exc:
+            logger.error(f"LLM think loop error: {exc}")
+
+
+@app.post("/agent/{agent_id}/think")
+async def agent_think(agent_id: str, payload: Dict = None):
+    """Manually trigger an LLM inner monologue (System 2)"""
+    init_agent(agent_id)
+    payload = payload or {}
+    if not LLM_CONFIG.get("enabled"):
+        return {"status": "llm_disabled",
+                "thought": _inner_thought(agent_id)}  # template fallback
+    try:
+        thought = await _llm_think(agent_id, payload.get("topic", ""))
+        return {"status": "ok", "thought": thought, "provider": LLM_CONFIG["provider"]}
+    except Exception as exc:
+        logger.warning(f"Think failed: {exc}")
+        return {"status": "llm_error", "thought": _inner_thought(agent_id), "error": str(exc)[:120]}
 
 
 @app.get("/agent/{agent_id}/revelation/status")
@@ -2166,8 +2348,16 @@ async def _reflect(agent_id: str):
     await _consolidate_memories(agent_id, new_salient)
     agent["last_reflection_tick"] = max(m.get("time", 0) for m in new_salient)
 
-    # Draw a lesson from the most important event
+    # Draw a lesson from the most important event (LLM when available)
     top = max(new_salient, key=lambda m: m.get("importance", 0))
+    if LLM_CONFIG.get("enabled"):
+        try:
+            lesson = await _llm_reflect_lesson(agent_id, top)
+            _add_thought(agent_id, "Оглядываясь назад: " + lesson)
+            return
+        except Exception as exc:
+            logger.warning(f"LLM reflection failed: {exc}")
+
     what = top.get("what", "")
     if "не получилось" in what or (top.get("tags") and "failure" in top.get("tags")):
         _add_thought(agent_id, "Почему не получилось? В следующий раз попробую иначе.")
@@ -2234,7 +2424,12 @@ async def _background_daemon_loop():
 
 @app.on_event("startup")
 async def _start_daemon():
+    # Detect LLM backend (cloud key → DeepSeek; else local Ollama)
+    global LLM_CONFIG
+    LLM_CONFIG = _detect_llm()
     asyncio.get_event_loop().create_task(_background_daemon_loop())
+    if LLM_CONFIG.get("enabled"):
+        asyncio.get_event_loop().create_task(_llm_think_loop())
 
 
 @app.post("/agent/{agent_id}/sleep")
@@ -2301,6 +2496,9 @@ def _load_state():
             agent_states[aid] = agent
             # Restore default snapshot if missing
             agent.setdefault("world_snapshot", {})
+            # Legacy states may lack body position
+            agent.setdefault("body", {})
+            agent["body"].setdefault("position", [12, 8])
         for aid, sm in payload.get("self_models", {}).items():
             self_model[aid] = sm
         for aid, mem in payload.get("memories", {}).items():

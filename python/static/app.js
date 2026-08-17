@@ -503,6 +503,24 @@ async function triggerDream() {
   addWhisperLog('<span style="color:#8a6ae0">🌙 Сон обработан</span>', '#8a6ae0');
 }
 
+async function triggerThink() {
+  const btn = $('think-trigger');
+  btn.disabled = true;
+  btn.textContent = '💭 Думает...';
+  const r = await apiPost(`/agent/${AGENT}/think`, { topic: 'что я чувствую и что мне делать дальше' });
+  btn.disabled = false;
+  btn.textContent = '💭 Подумать';
+  const box = $('dream-result');
+  box.classList.remove('hidden');
+  if (r && r.thought) {
+    const provider = r.provider === 'ollama' ? ' (локальный мозг)' : r.provider === 'cloud' ? ' (облако)' : '';
+    box.innerHTML = `<b style="color:#7af0a0">💭 Мысль Kato${provider}:</b><br><span style="color:var(--text)">${r.thought}</span>`;
+    addWhisperLog('<span style="color:#7af0a0">💭 Kato подумала</span>', '#7af0a0');
+  } else {
+    box.innerHTML = '<span style="color:#f06060">Мышление недоступно (модель не подключена)</span>';
+  }
+}
+
 // ── INIT ───────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -515,6 +533,7 @@ document.querySelectorAll('.tab').forEach(tab => {
 $('whisper-send').addEventListener('click', sendWhisper);
 $('whisper-input').addEventListener('keydown', e => { if (e.key === 'Enter') sendWhisper(); });
 $('dream-trigger').addEventListener('click', triggerDream);
+$('think-trigger').addEventListener('click', triggerThink);
 $('ask-btn').addEventListener('click', async () => {
   const a = await api(`/agent/${AGENT}/self-model/answers`);
   if (a) renderAnswers(a);
