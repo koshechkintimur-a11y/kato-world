@@ -126,12 +126,45 @@ kato-world/
 - [x] **Phase 2**: Body & needs (energy, comfort, stress, homeostasis)
 - [x] **Phase 3**: Brain server (perception, System 1/2, action proposals)
 - [x] **Phase 4**: Divine Whisper Gateway (dream integration)
-- [ ] **Phase 5**: Memory systems (episodic, semantic, autobiographical, emotional)
-- [ ] **Phase 6**: Emotion system (vector, influence on behavior, memory salience)
+- [x] **Phase 5**: Memory systems (episodic, semantic, autobiographical, emotional)
+- [x] **Phase 6**: Emotion system (7-vector, mood/VAD, salience modulation, behavior drive)
 - [ ] **Phase 7**: Self-model (identity, values, goals, beliefs, relationships)
 - [ ] **Phase 8**: Background daemon (sleep, consolidation, reflection)
 - [ ] **Phase 9**: NPC curriculum (teacher, gardener, librarian, mirror keeper)
 - [ ] **Phase 10**: Creator revelation protocol
+
+## Emotion System
+
+Seven-emotion vector: `joy, fear, anger, sadness, curiosity, trust, attachment`
+
+**Homeostatic model**: each emotion converges toward its current drive
+(computed from body state, events, hormones, NPCs) at its own speed —
+fast emotions (fear/joy) react quickly, slow emotions (trust/curiosity)
+are stable, attachment grows over many interactions.
+
+```
+e(t+1) = e(t)·(1-α) + drive·α
+
+fear_drive   = stress·0.7 + pain·0.25 + (1-safety)·0.3
+joy_drive    = comfort·0.4 + reward·0.3 + success_bonus
+anger_drive  = blocked_goal·0.35 + stress·0.3 + pain·0.2
+curiosity    = novelty + arousal, suppressed by fear
+```
+
+**Mood** = VAD (valence/arousal/dominance) computed from the vector,
+with stress override: stress > 40 → alert, > 60 → anxious, > 80 → distressed.
+
+**Emotions drive behavior** (System 1):
+- fear > 0.55 → seek teacher/reassurance; fear > 0.35 → move cautiously
+- anger > 0.5 → try again (persistence)
+- sadness > 0.5 → withdraw to quiet spot
+- curiosity > 0.6 → explore
+- joy + trust → approach NPC
+
+**Emotions shape memory**: arousal boost multiplies event salience
+(an emotional event is remembered more strongly), and emotional memories
+are tagged by the emotion that *deviated most from baseline* — a scary
+event is tagged `fear` even if the agent's trust baseline is higher.
 
 ## Key Concepts
 
