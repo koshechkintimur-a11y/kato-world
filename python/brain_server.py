@@ -2013,23 +2013,21 @@ async def _creator_reply(agent_id: str, question: str) -> str:
     """Creator's reply: LLM if enabled, else template"""
     if LLM_CONFIG.get("enabled"):
         try:
-            return await _llm_complete(CREATOR_PROMPT, question, max_tokens=250)
+            return await _llm_complete(CREATOR_PROMPT, [{"role": "user", "content": question}], max_tokens=250)
         except Exception as exc:
             logger.warning(f"LLM reply failed, using template: {exc}")
     return _creator_reply_template(question)
 
 
-async def _llm_complete(system: str, user: str, max_tokens: int = 300) -> str:
-    """Minimal OpenAI-compatible chat completion (DeepSeek cloud or local Ollama)"""
+async def _llm_complete(system: str, messages: list, max_tokens: int = 300) -> str:
+    """Minimal OpenAI-compatible chat completion (DeepSeek cloud or local Ollama).
+    messages: list of {"role": "user"/"assistant", "content": str}"""
     if not LLM_CONFIG.get("enabled"):
         raise RuntimeError("LLM not enabled")
     import urllib.request as urlreq
     payload = json.dumps({
         "model": LLM_CONFIG["model"],
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ],
+        "messages": [{"role": "system", "content": system}] + messages,
         "max_tokens": max_tokens,
         "temperature": 0.8,
         "stream": False
@@ -2103,7 +2101,7 @@ async def _llm_think(agent_id: str, topic: str = "") -> str:
             f"Тема для размышления: {topic or 'что мне делать дальше и что я чувствую'}.\n"
             "Подумай об этом.")
 
-    text = await _llm_complete(_kato_system_prompt(agent_id), user, max_tokens=200)
+    text = await _llm_complete(_kato_system_prompt(agent_id), [{"role": "user", "content": user}], max_tokens=200)
     _add_thought(agent_id, text)
     return text
 
@@ -2114,7 +2112,7 @@ async def _llm_reflect_lesson(agent_id: str, event: Dict) -> str:
     imp = event.get("importance", 0)
     user = (f"Я вспоминаю: «{what}» (это было важно, важность {imp:.2f}).\n"
             "Какой урок я из этого извлекаю? Одно предложение, по-русски, от первого лица.")
-    lesson = await _llm_complete(_kato_system_prompt(agent_id), user, max_tokens=100)
+    lesson = await _llm_complete(_kato_system_prompt(agent_id), [{"role": "user", "content": user}], max_tokens=100)
     mem = memory_store[agent_id]
     mem["semantic"].append({
         "id": str(uuid.uuid4()),
@@ -2397,7 +2395,12 @@ async def _portal_maybe_reply(agent_id: str):
 
     if LLM_CONFIG.get("enabled"):
         try:
-            reply_text = await _llm_complete(DISTANT_FRIEND_PROMPT, latest["text"], max_tokens=150)
+            # Build conversation history for context
+            conv_history = []
+            for m in conv[-10:]:  # last 10 messages
+                role = "user" if m["role"] == "creator" else "assistant"
+                conv_history.append({"role": role, "content": m["text"]})
+            reply_text = await _llm_complete(DISTANT_FRIEND_PROMPT, conv_history, max_tokens=150)
         except Exception as exc:
             logger.warning(f"Portal reply LLM failed, template used: {exc}")
             reply_text = _portal_reply_template(latest["text"])
@@ -2585,16 +2588,16 @@ async def portal_read(agent_id: str, payload: Dict):
         raise HTTPException(404, "Category is empty")
 
     # LLM retelling in childlike voice when available; else raw text
-    text = article["text"]
-    if LLM_CONFIG.get("enabled"):
-        try:
-            prompt = ("Ты — Библиотекарь. Kato, маленькое существо, заглянула в Дальнее окно и увидела статью. "
-                      "Перескажи ей статью простыми словами, как другу, 3-4 предложения, по-русски, тепло и любопытно. "
-                      "Не упоминай компьютеры, интернет, программы или что мир — игра. Для Kato это «дальние места».\n"
-                      "ВАЖНО: отвечай ТОЛЬКО на русском языке. Никакого китайского, английского или других языков.")
-            text = await _llm_complete(prompt, "Статья: " + article["title"] + "\n" + article["text"], max_tokens=200)
-        except Exception as exc:
-            logger.warning(f"Portal retelling failed, raw text used: {exc}")
+        text = article["text"]
+        if LLM_CONFIG.get("enabled"):
+            try:
+                prompt = ("Ты — Библиотекарь. Kato, маленькое существо, заглянула в Дальнее окно и увидела статью. "
+                          "Перескажи ей статью простыми словами, как другу, 3-4 предложения, по-русски, тепло и любопытно. "
+                          "Не упоминай компьютеры, интернет, программы или что мир — игра. Для Kato это «дальние места».\n"
+                          "ВАЖНО: отвечай ТОЛЬКО на русском языке. Никакого китайского, английского или других языков.")
+                text = await _llm_complete(prompt, [{"role": "user", "content": "Статья: " + article["title"] + "\n" + article["text"]}], max_tokens=200)
+            except Exception as exc:
+                logger.warning(f"Portal retelling failed, raw text used: {exc}")
 
     # Effects: memory, beliefs, energy
     mem = memory_store[agent_id]
@@ -3040,7 +3043,7 @@ def _serializable_memories(mem: Dict) -> Dict:
 
 def _save_state(path: str = None):
     try:
-        path = path or os.path.join(_DATA_DIR, _STATE_FILE)
+        path = path or os.path.join(_DATA_DIR, STATE_FILE)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         payload = {
             "saved_at": time.time(),

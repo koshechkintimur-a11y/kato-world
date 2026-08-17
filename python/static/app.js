@@ -17,7 +17,8 @@ const I18N = {
     energy: 'ЭНЕРГИЯ', comfort: 'КОМФОРТ', stress: 'СТРЕСС', integrity: 'ЦЕЛОСТНОСТЬ',
     mem_episodic: 'Эпизоды', mem_semantic: 'Знания', mem_auto: 'Биография', mem_emotional: 'Эмоц.',
     send: '✉ Отправить', think_btn: '💭 Подумать', dream_btn: '🌙 Вызвать сон', who_btn: '❓ Кто я?',
-    readiness: 'Готовность:', rev_begin: '✨ Начать контакт', rev_yes: '❤️ Да', rev_later: '⏳ Позже',
+        chat_title: '💬 ЧАТ В ДАЛЬНЕМ ОКНЕ', chat_ph: 'Напишите Kato...',
+        readiness: 'Готовность:', rev_begin: '✨ Начать контакт', rev_yes: '❤️ Да', rev_later: '⏳ Позже',
     rev_questions: '❓ У меня есть вопросы', rev_fear: '😨 Я боюсь',
     whisper_ph: 'Например: За закрытой дверью — не опасность, а возможность...',
     rev_ph: 'Вопрос Создателю...',
@@ -37,7 +38,8 @@ const I18N = {
     energy: 'ENERGY', comfort: 'COMFORT', stress: 'STRESS', integrity: 'INTEGRITY',
     mem_episodic: 'Episodes', mem_semantic: 'Knowledge', mem_auto: 'Biography', mem_emotional: 'Emo.',
     send: '✉ Send', think_btn: '💭 Think', dream_btn: '🌙 Dream', who_btn: '❓ Who am I?',
-    readiness: 'Readiness:', rev_begin: '✨ Begin contact', rev_yes: '❤️ Yes', rev_later: '⏳ Later',
+        chat_title: '💬 CHAT IN DISTANT WINDOW', chat_ph: 'Write to Kato...',
+        readiness: 'Readiness:', rev_begin: '✨ Begin contact', rev_yes: '❤️ Yes', rev_later: '⏳ Later',
     rev_questions: '❓ I have questions', rev_fear: '😨 I am scared',
     whisper_ph: 'E.g. Beyond the closed door lies not danger, but possibility...',
     rev_ph: 'Question for the Creator...',
@@ -1061,3 +1063,6 @@ setTimeout(() => {
     if (p && p.state === 'active') startChatPoll();
   }).catch(() => {});
 }, 1000);
+
+setInterval(poll, 1500);
+poll();

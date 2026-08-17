@@ -117,12 +117,19 @@
         <span id="rev-ready-pct" style="width:44px;text-align:right;color:var(--accent)">0%</span>
       </div>
       <div id="rev-components" class="rev-components"></div>
-      <div id="rev-choices" class="rev-choices hidden"></div>
-      <div id="rev-contact-input" class="rev-contact-input hidden">
-        <input id="rev-input" type="text" placeholder="Вопрос Создателю..." maxlength="500" data-i18n-ph="rev_ph">
-        <button id="rev-send" data-i18n="send">➤</button>
+      <div class="rev-actions">
+        <button id="rev-begin" data-i18n="rev_begin">✨ Начать контакт</button>
+        <button id="rev-yes" class="hidden" data-i18n="rev_yes">❤️ Да</button>
+        <button id="rev-later" class="hidden" data-i18n="rev_later">⏳ Позже</button>
+        <button id="rev-questions" class="hidden" data-i18n="rev_questions">❓ У меня есть вопросы</button>
+        <button id="rev-fear" class="hidden" data-i18n="rev_fear">😨 Я боюсь</button>
       </div>
-      <div id="rev-journal" class="rev-journal"></div>
+      <div id="rev-message" class="dream-box hidden"></div>
+      <div class="rev-chat">
+        <input id="rev-input" type="text" placeholder="Вопрос Создателю..." data-i18n-ph="rev_ph" maxlength="300">
+        <button id="rev-send">➤</button>
+      </div>
+      <div id="rev-journal" class="scroll"></div>
     </section>
   </main>
 </div>
