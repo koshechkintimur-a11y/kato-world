@@ -178,15 +178,20 @@ async function poll() {
 
 // ── WORLD CANVAS ───────────────────────────────────────────────
 function drawPixel(ctx, x, y, w, h, color) {
+  if (!color) return;
   ctx.fillStyle = color;
-  ctx.fillRect(x * TILE, y * TILE, w, h);
+  ctx.fillRect(x * TILE, y * TILE, w * TILE, h * TILE);
 }
 function drawSprite(ctx, x, y, pixels) {
-  // pixels: 2D array of color strings or null
+  // pixels: 2D array (16×16) of color strings or null; each cell = TILE/16 px
+  const s = TILE / 16;
   for (let py = 0; py < pixels.length; py++)
     for (let px = 0; px < pixels[py].length; px++) {
       const c = pixels[py][px];
-      if (c) drawPixel(ctx, x + px, y + py, 1, 1, c);
+      if (c) {
+        ctx.fillStyle = c;
+        ctx.fillRect(x * TILE + px * s, y * TILE + py * s, s + 0.5, s + 0.5);
+      }
     }
 }
 
@@ -377,6 +382,21 @@ function renderWorld() {
     drawPixel(ctx, tx + 1, ty - 1, 1, 1, applyDim('#4a9a4a', dim));
   }
 
+
+  // ── Curtains on the window ──
+  drawPixel(ctx, 12, 2, 1, 4, applyDim('#8a3a3a', dim));
+  drawPixel(ctx, 13, 2, 1, 4, applyDim('#8a3a3a', dim));
+  drawPixel(ctx, 11, 2, 2, 1, applyDim('#7a2a2a', dim));
+
+
+  // ── Bedroom wallpaper dots (left wall band) ──
+  for (let wy = 3; wy <= 7; wy += 2) {
+    for (let wx = 2; wx <= 6; wx += 2) {
+      drawPixel(ctx, wx, wy, 1, 1, applyDim('#d8b888', dim * 1.15));
+    }
+  }
+  // Candle on the desk
+  drawPixel(ctx, 7, 3, 1, 1, applyDim('#f5d76e', 1));
   // ── Objects ──
   const objs = world && world.objects ? world.objects : [];
   for (const o of objs) {
@@ -432,6 +452,17 @@ function renderWorld() {
       ctx.fill();
     }
     ctx.restore();
+  }
+
+
+  // ── Night fireflies in the garden ──
+  if (isNight) {
+    const ff = [[4,20],[6,24],[18,17],[21,22],[23,26],[16,25],[9,22],[24,18],[2,27],[19,28]];
+    const t = Date.now() / 700;
+    for (let i = 0; i < ff.length; i++) {
+      const b = 0.35 + 0.3 * Math.sin(t + i * 1.7);
+      drawPixel(ctx, ff[i][0], ff[i][1], 1, 1, `rgba(220, 255, 120, ${b.toFixed(2)})`);
+    }
   }
 
   // ── NPCs ──

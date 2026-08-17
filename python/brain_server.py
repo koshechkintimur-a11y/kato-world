@@ -1881,6 +1881,10 @@ async def _llm_complete(system: str, user: str, max_tokens: int = 300) -> str:
     content = data["choices"][0]["message"]["content"].strip()
     if not content:
         raise RuntimeError("LLM returned empty content")
+    # qwen occasionally "thinks aloud" in Chinese mid-answer — strip CJK runs
+    import re
+    content = re.sub(r"[\u4e00-\u9fff\u3400-\u4dbf]+", "", content)
+    content = re.sub(r"\s{2,}", " ", content).strip(" ,;:。")
     return content
 
 

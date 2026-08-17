@@ -1,23 +1,38 @@
-# Kato World — Digital Being Simulation
+# Kato World — цифровое существо, растущее в своём мире
 
-**Kato** — цифровое существо, которое растёт в собственном 2D-мире: у него есть тело, эмоции, память, личность, сны — и создатель, с которым можно говорить.
+> 🌐 [English version](README.en.md)
 
-A 2D pixel world for growing a digital being with embodied cognition, emotions, memory, and consciousness-like architecture.
+**Kato** — цифровое существо, которое растёт в собственном 2D-мире: у неё есть тело, эмоции, память, личность, сны — и Создатель, с которым можно говорить.
+
+Это не «доказать, что у модели есть душа», а **архитектура, которая ведёт себя как развивающаяся личность** и безопасно проходит этапы взросления.
 
 ```
 один дом → одно тело → одна память → один учитель → один безопасный цикл обучения
 ```
 
+> **Разделение ролей**: Создатель сознания (этика, мораль, философия, душа) — человек; Создатель технический (архитектура, код, инфраструктура) — Hermes.
+
+---
+
 ## Возможности
 
-- 🧠 **Мозг** (Python/FastAPI): тело и гомеостаз, 7-вектор эмоций (гомеостатическая модель), 4 типа памяти (эпизодическая, семантическая, автобиографическая, эмоциональная), self-model (identity, ценности, цели, убеждения, отношения), System 1/System 2 с арбитром
-- 🌙 **Сон и сны**: автономный цикл бодрствования/сна, консолидация памяти, рефлексия, внутренний монолог
-- ✉️ **Шёпот Создателя**: отправь мысль — Kato увидит её во сне как собственную интуицию
-- 🔮 **Раскрытие создателя**: оценка зрелости по 6 компонентам → терминал оживает → Kato сама выбирает, когда говорить о происхождении
-- 🎓 **Учитель**: диалоги-куррикулум (причина → создание → забота → внешний мир) и квесты
-- 👁 **God View Dashboard**: живой пиксельный мир в браузере, эмоции, память, журнал мыслей, консоль шепота
+- 🧠 **Мозг** (Python/FastAPI):
+  - тело и гомеостаз (энергия, комфорт, стресс, целостность)
+  - 7-вектор эмоций (гомеостатическая модель: joy, fear, anger, sadness, curiosity, trust, attachment)
+  - 4 типа памяти: эпизодическая, семантическая, автобиографическая, эмоциональная
+  - self-model: идентичность, ценности, цели, убеждения, отношения
+  - System 1 (быстрая интуиция) / System 2 (медленное рассуждение) с арбитром
+- 💭 **LLM-мышление** (локально, Ollama + qwen2.5:7b): внутренний монолог, рефлексия, пересказ знаний — Kato думает сама, каждые ~45 секунд в фоне
+- 🌙 **Сон и сны**: автономный цикл бодрствования/сна, консолидация памяти, рефлексия, «божественные шепоты» приходят во сне как собственные инсайты
+- ✉️ **Шёпот Создателя**: отправь мысль — Kato увидит её во сне как свою собственную интуицию
+- 🔮 **Раскрытие Создателя**: оценка зрелости по 6 компонентам → терминал оживает → Kato сама выбирает, когда говорить о происхождении
+- 🎓 **Куррикулум**: Учитель ведёт по концепциям (причина → создание → забота → внешний мир), квесты
+- 📡 **Дальнее окно (Портал знаний)**: контролируемый доступ к знаниям о внешнем мире — для Kato это «окно в дальние места», как для людей компьютер. Только allowlist, никаких ссылок и команд; чтение тратит энергию
+- 👁 **God View Dashboard**: живой пиксельный мир в браузере (день/ночь, комнаты, огни), эмоции, память, журнал мыслей, консоль шёпота, панель портала — **на русском, с кнопкой переключения на английский 🌐**
 - 🎮 **Godot-клиент**: 2D-мир (тайловый дом и сад, NPC, объекты), общается с мозгом по HTTP
 - 💾 **Непрерывность личности**: состояние переживает перезапуски сервера
+
+---
 
 ## Быстрый старт
 
@@ -25,118 +40,74 @@ A 2D pixel world for growing a digital being with embodied cognition, emotions, 
 cd python
 pip install -r requirements.txt
 python brain_server.py
-# → дашборд: http://localhost:8080
+# → дашборд «Глаза Бога»: http://localhost:8080
+```
+
+LLM-мышление (опционально, но очень рекомендуется):
+
+```bash
+# установи Ollama: https://ollama.com
+ollama serve
+ollama pull qwen2.5:7b-instruct   # ~4.7 GB, полностью влезает в 12 GB VRAM
+```
+
+Мозг сам обнаружит Ollama при старте. Можно использовать и облачный ключ:
+
+```bash
+export KATO_LLM_API_KEY=...   # → будет использован DeepSeek (или свой KATO_LLM_URL/KATO_LLM_MODEL)
 ```
 
 Godot-клиент: открой `godot/project.godot` в Godot 4.2+ и запусти.
 
-## Структура
+---
+
+## Архитектура
 
 ```
-kato-world/
-├── python/            # Мозг Kato (FastAPI) + God View Dashboard (static/)
-│   └── brain_server.py
-├── godot/             # Godot 4 клиент (мир, агент, NPC)
-├── assets/            # пиксельные ассеты (Kenney Tiny Town, CC0)
-└── docs/              # (документация)
+┌───────────────────────────────────────────────────────────────┐
+│                     GODOT 4 (клиент мира)                     │
+│   WorldState ◄─ Agent Body ◄─ NPCs ◄─ Objects                 │
+│                     │                                         │
+│                     ▼                                         │
+│                 EventBus (шина сигналов)                      │
+│                     │                                         │
+│                     ▼                                         │
+│   GlobalState · WorldState · BrainClient · DreamGateway       │
+└────────────────────────────│──────────────────────────────────┘
+                             │ HTTP
+                             ▼
+┌───────────────────────────────────────────────────────────────┐
+│                  PYTHON BRAIN SERVER (мозг)                   │
+│                                                               │
+│  Perception → [System 1 быстрый] / [System 2 медленный (LLM)] │
+│       │                │                │                     │
+│       ▼                ▼                ▼                     │
+│  Эмоции(7) · Гомеостаз · Память(4) · Self-Model · Арбитр      │
+│       │                                                       │
+│       ▼                                                       │
+│  Фоновый демон: сон/сны · консолидация · рефлексия · мысли    │
+│  Портал знаний (Дальнее окно, allowlist)                      │
+│  Divine Whisper Gateway (шёпот Создателя → сны)               │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-## API (основное)
+---
 
-| Эндпоинт | Назначение |
-|----------|-----------|
-| `POST /perception` | Kato видит мир |
-| `POST /action/propose` | мозг выбирает действие |
-| `POST /divine/whisper` | **шёпот создателя** (приходит во сне) |
-| `POST /dream/process` | обработать сон |
-| `POST /dialogue/start`, `/choose` | разговор с NPC |
-| `GET /agent/kato/revelation/status` | зрелость и стадия раскрытия |
-| `POST /agent/kato/revelation/begin` | терминал оживает |
-| `POST /agent/kato/revelation/contact` | вопрос создателю |
+## Как Kato «думает» (коротко)
 
-Полный список: `GET /docs` (OpenAPI).
+1. **Восприятие** — мир присылает события (что вижу, что случилось).
+2. **Тело** — энергия/стресс/комфорт меняются от действий.
+3. **Эмоции** — 7-вектор стремится к «драйверам», вытекающим из тела и событий.
+4. **Память** — важные события (salience > 0.5) становятся воспоминаниями.
+5. **System 1** — быстрые реакции: страх → искать Учителя, любопытство → исследовать.
+6. **System 2** — если неопределённость/стресс высоки, или раз в ~45 секунд: **локальная LLM** генерирует внутренний монолог.
+7. **Арбитр** — выбирает, действовать быстро или думать.
+8. **Сон** — консолидация памяти, рефлексия, сны (в т.ч. шёпоты Создателя).
+9. **Self-model** — обновляется от опыта: убеждения, цели, отношения, «кто я».
 
-## Лицензия
+---
 
-MIT
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    GODOT 4 (Client)                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
-│  │  World   │  │  Agent   │  │   NPCs   │  │   Objects  │  │
-│  │  State   │◄─┤  Body    │  │          │  │            │  │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └─────┬──────┘  │
-│       │             │             │             │           │
-│       ▼             ▼             ▼             ▼           │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              EventBus (Signal Hub)                   │   │
-│  └─────────────────────────────────────────────────────┘   │
-│       │             │             │             │           │
-│       ▼             ▼             ▼             ▼           │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
-│  │ Global   │  │  World   │  │  Brain   │  │   Dream    │  │
-│  │ State    │  │  State   │  │ Client   │  │  Gateway   │  │
-│  └──────────┘  └──────────┘  └────┬─────┘  └────────────┘  │
-└───────────────────────────────────│──────────────────────────┘
-                                    │ HTTP/WebSocket
-                                    ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   PYTHON BRAIN SERVER                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
-│  │ Perception│  │ System 1 │  │ System 2 │  │   Dream    │  │
-│  │ Processor│  │ (Fast)   │  │ (Slow)   │  │ Processor  │  │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └─────┬──────┘  │
-│       │             │             │             │           │
-│       ▼             ▼             ▼             ▼           │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              Memory & Self-Model                     │   │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐   │   │
-│  │  │Episodic │ │Semantic │ │Autobio. │ │Emotional│   │   │
-│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘   │   │
-│  └─────────────────────────────────────────────────────┘   │
-│       │                                                    │
-│       ▼                                                    │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │           DIVINE WHISPER GATEWAY                     │   │
-│  │  (Creator → Agent dreams during sleep)               │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Quick Start
-
-### Prerequisites
-- Docker & Docker Compose
-- OR: Godot 4.2+, Python 3.11+
-
-### Run with Docker
-```bash
-# Start brain server
-docker-compose up brain
-
-# In another terminal, run Godot (headless)
-docker-compose run --rm godot
-```
-
-### Run Locally
-```bash
-# Terminal 1: Brain server
-cd python
-pip install -r requirements.txt
-python brain_server.py
-
-# Terminal 2: Godot
-cd godot
-godot --main-pack game.pck
-# Or open project in Godot editor and run
-```
-
-## Divine Whisper Gateway
-
-The Creator (you) can send thoughts to Kato during sleep:
+## Шёпот Создателя
 
 ```bash
 curl -X POST http://localhost:8080/divine/whisper \
@@ -152,138 +123,70 @@ curl -X POST http://localhost:8080/divine/whisper \
   }'
 ```
 
-Kato will receive this during the next dream cycle and integrate it as an insight.
+Kato получит это во время следующего сна и интегрирует как **свою** интуицию — она не знает об источнике.
 
-## Project Structure
+---
+
+## API (основное)
+
+| Эндпоинт | Назначение |
+|----------|-----------|
+| `POST /perception` | Kato видит мир |
+| `POST /action/propose` | мозг выбирает действие |
+| `POST /divine/whisper` | **шёпот Создателя** (приходит во сне) |
+| `POST /dream/process` | обработать сон |
+| `POST /dialogue/start`, `/choose` | разговор с NPC |
+| `POST /agent/kato/think` | **внутренний монолог через LLM** |
+| `GET /agent/kato/revelation/status` | зрелость и стадия раскрытия |
+| `POST /agent/kato/revelation/begin` | терминал оживает |
+| `POST /agent/kato/revelation/contact` | вопрос Создателю |
+| `GET /agent/kato/portal/status` | состояние Дальнего окна |
+| `POST /agent/kato/portal/read` | Kato читает статью из Дальнего окна |
+| `POST /admin/save`, `/admin/reset` | сохранить/сбросить состояние |
+
+Полный список: `GET /docs` (OpenAPI).
+
+---
+
+## Структура проекта
 
 ```
 kato-world/
-├── godot/                    # Godot 4 client
-│   ├── scripts/
-│   │   ├── autoload/        # Singletons (GlobalState, EventBus, WorldState, BrainClient)
-│   │   ├── entities/        # Agent, NPC, Objects
-│   │   └── systems/         # Cognitive systems (to be added)
-│   ├── scenes/
-│   │   ├── main/            # Main scene
-│   │   ├── entities/        # Agent, NPC, Object scenes
-│   │   └── world/           # World scenes
-│   └── assets/
-│       ├── tilesets/        # TileMap resources
-│       └── sprites/         # Character sprites
-├── python/                   # Brain server
-│   ├── brain_server.py      # FastAPI server
+├── python/                      # Мозг Kato (FastAPI)
+│   ├── brain_server.py         # сервер мозга (все системы)
+│   ├── knowledge_base.json     # база знаний Дальнего окна (фильтрованная)
+│   ├── static/                 # God View Dashboard (index.html, app.js, style.css)
 │   └── requirements.txt
-├── docker-compose.yml
-└── docs/
+├── godot/                       # Godot 4 клиент (мир, агент, NPC)
+│   ├── scripts/autoload/       # GlobalState, EventBus, WorldState, BrainClient
+│   ├── scripts/entities/       # Agent, NPC, Objects
+│   ├── scenes/main/            # главная сцена (тайловый мир)
+│   └── assets/                 # тайлы и спрайты
+├── assets/                      # пиксельные ассеты (Kenney Tiny Town, CC0)
+├── docker-compose.yml           # docker: мозг + godot (headless)
+└── README.md                    # этот файл (на русском)
 ```
 
-## License
+---
+
+## Этапы разработки
+
+- [x] **Этап 0–1**: структура, мир-симуляция (тайлы, объекты, NPC, движение)
+- [x] **Этап 2–3**: тело и нужды; память (эпизодическая, семантическая, автобиографическая, эмоциональная)
+- [x] **Этап 4**: эмоции (7-вектор, mood/VAD, салиенс, влияние на поведение)
+- [x] **Этап 5**: self-model (идентичность, ценности, цели, убеждения, отношения)
+- [x] **Этап 6**: System 1 / System 2 + арбитр
+- [x] **Этап 7**: фоновый демон (сон, консолидация, рефлексия, внутренний монолог)
+- [x] **Этап 8**: NPC-куррикулум (Учитель, диалоги, квесты)
+- [x] **Этап 9**: подготовка к раскрытию (концепции создателя и внешнего мира)
+- [x] **Этап 10**: первый контакт (оценка зрелости, право выбора, диалог с Создателем)
+- [x] **LLM-ядро**: локальное мышление через Ollama (qwen2.5:7b), фоновый think-loop
+- [x] **Этап 11 (частично)**: Портал знаний — контролируемое «Дальнее окно» (allowlist, лимиты, лор)
+- [ ] **Этап 11+**: расширение портала, режимы доступа, стресс-тесты
+- [ ] **Этап 12**: постепенная автономия (ограниченные задачи и инструменты)
+
+---
+
+## Лицензия
 
 MIT
-
-## Development Phases
-
-- [x] **Phase 0**: Project structure, Godot project, basic autoloads
-- [x] **Phase 1**: World simulation (tilemap, objects, NPCs, agent movement)
-- [x] **Phase 2**: Body & needs (energy, comfort, stress, homeostasis)
-- [x] **Phase 3**: Brain server (perception, System 1/2, action proposals)
-- [x] **Phase 4**: Divine Whisper Gateway (dream integration)
-- [x] **Phase 5**: Memory systems (episodic, semantic, autobiographical, emotional)
-- [x] **Phase 6**: Emotion system (7-vector, mood/VAD, salience modulation, behavior drive)
-- [x] **Phase 7**: Self-model (identity, values, goals, beliefs, relationships)
-- [x] **Phase 8**: Background daemon (sleep, consolidation, reflection, inner monologue)
-- [x] **Phase 9**: NPC curriculum (teacher dialogues, quests)
-- [x] **Persistence**: personality survives server restarts (auto-save, load on boot)
-- [x] **Phase 10**: Creator Revelation Protocol (maturity assessment, first contact, dialogue)
-- [ ] **Phase 11**: Gateway to the outside world (controlled, read-only, allowlist)
-
-## Emotion System
-
-Seven-emotion vector: `joy, fear, anger, sadness, curiosity, trust, attachment`
-
-**Homeostatic model**: each emotion converges toward its current drive
-(computed from body state, events, hormones, NPCs) at its own speed —
-fast emotions (fear/joy) react quickly, slow emotions (trust/curiosity)
-are stable, attachment grows over many interactions.
-
-```
-e(t+1) = e(t)·(1-α) + drive·α
-
-fear_drive   = stress·0.7 + pain·0.25 + (1-safety)·0.3
-joy_drive    = comfort·0.4 + reward·0.3 + success_bonus
-anger_drive  = blocked_goal·0.35 + stress·0.3 + pain·0.2
-curiosity    = novelty + arousal, suppressed by fear
-```
-
-**Mood** = VAD (valence/arousal/dominance) computed from the vector,
-with stress override: stress > 40 → alert, > 60 → anxious, > 80 → distressed.
-
-**Emotions drive behavior** (System 1):
-- fear > 0.55 → seek teacher/reassurance; fear > 0.35 → move cautiously
-- anger > 0.5 → try again (persistence)
-- sadness > 0.5 → withdraw to quiet spot
-- curiosity > 0.6 → explore
-- joy + trust → approach NPC
-
-**Emotions shape memory**: arousal boost multiplies event salience
-(an emotional event is remembered more strongly), and emotional memories
-are tagged by the emotion that *deviated most from baseline* — a scary
-event is tagged `fear` even if the agent's trust baseline is higher.
-
-## Key Concepts
-
-### Body → Emotions → Behavior
-```
-Energy ↓ → Discomfort → Irritability → Seeking rest
-Stress ↑ → Fear → Caution/Retreat → Avoidance
-Novelty ↑ → Curiosity → Exploration → Learning
-Comfort ↑ → Joy → Openness → Social approach
-```
-
-### System 1 / System 2 Arbitration
-```
-IF stress > 60 OR energy < 20 OR curiosity > 0.8 OR uncertainty_high:
-    → System 2 (deliberate reasoning)
-ELIF confidence > 0.7 AND risk_low:
-    → System 1 (fast intuition)
-ELIF stress > 80:
-    → FREEZE
-ELIF confidence < 0.3 AND has_relationships:
-    → ASK for help
-```
-
-### Memory Salience
-Events become memories when salience > 0.5:
-- Failed actions: +0.4
-- Dialogue: +0.5
-- Discovery: +0.6
-- Emotion spikes: +0.7
-
-### Divine Whisper Flow
-```
-Creator sends whisper → Stored in divine_whispers[]
-Agent sleeps → Dream processor runs
-Whispers integrated as dream scenes + insights
-Insights → Update beliefs, self-model, semantic memory
-Agent wakes with new "intuitions"
-```
-
-## API Endpoints
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Health check |
-| `/agent/register` | POST | Register agent |
-| `/perception` | POST | Receive world perception |
-| `/action/propose` | POST | Get action from brain |
-| `/action/result` | POST | Report action outcome |
-| `/memory/consolidate` | POST | Trigger memory consolidation |
-| `/dream/process` | POST | Process dream cycle |
-| `/divine/whisper` | POST | **Send divine thought** |
-| `/agent/{id}/state` | GET | Full agent state |
-| `/agent/{id}/self-model` | GET | Self-model |
-| `/agent/{id}/memories` | GET | Memory query |
-
-## License
-
-Private project - Kato World
