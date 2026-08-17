@@ -82,6 +82,30 @@
       <div id="whisper-log" class="scroll"></div>
       <div id="dream-result" class="dream-box hidden"></div>
     </section>
+
+    <!-- BOTTOM-2: revelation panel -->
+    <section id="revelation-section">
+      <div class="panel-title">🔮 РАСКРЫТИЕ СОЗДАТЕЛЯ <span id="rev-stage" class="mood"></span></div>
+      <div class="rev-row">
+        <span class="rev-label">Готовность:</span>
+        <div class="bar-bg" style="flex:1"><div id="rev-ready-bar" class="bar-fill" style="width:0%;background:linear-gradient(90deg,#8a6ae0,#f0a6d2)"></div></div>
+        <span id="rev-ready-pct" style="width:44px;text-align:right;color:var(--accent)">0%</span>
+      </div>
+      <div id="rev-components" class="rev-components"></div>
+      <div class="rev-actions">
+        <button id="rev-begin">✨ Начать контакт</button>
+        <button id="rev-yes" class="hidden">❤️ Да</button>
+        <button id="rev-later" class="hidden">⏳ Позже</button>
+        <button id="rev-questions" class="hidden">❓ У меня есть вопросы</button>
+        <button id="rev-fear" class="hidden">😨 Я боюсь</button>
+      </div>
+      <div id="rev-message" class="dream-box hidden"></div>
+      <div class="rev-chat">
+        <input id="rev-input" type="text" placeholder="Вопрос Создателю..." maxlength="300">
+        <button id="rev-send">➤</button>
+      </div>
+      <div id="rev-journal" class="scroll"></div>
+    </section>
   </main>
 </div>
 <script src="/static/app.js"></script>

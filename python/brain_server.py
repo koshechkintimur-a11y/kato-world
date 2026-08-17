@@ -145,7 +145,14 @@ def init_agent(agent_id: str):
             "last_perception_real_time": 0.0,
             "headless_ticks": 0,
             "thoughts": [],          # inner monologue (recent)
-            "last_reflection_tick": 0
+            "last_reflection_tick": 0,
+            # Creator revelation protocol state
+            "revelation": {
+                "stage": "not_started",   # not_started → offered → in_contact → integrated
+                "offer_tick": None,
+                "choice": None,
+                "journal": []
+            }
         }
         
         # Initialize all memory systems
@@ -1587,6 +1594,341 @@ async def complete_quest(payload: Dict):
         return {"status": "not_yet", "grown_found": len(grown), "crafted_found": len(crafted)}
 
     return {"status": "unknown_quest"}
+
+
+# ──────────────────────────────────────────────────────────────
+# CREATOR REVELATION PROTOCOL (Phase 10)
+# Maturity assessment + staged first contact + creator dialogue
+# ──────────────────────────────────────────────────────────────
+
+REVELATION_READY_THRESHOLD = 0.55
+
+# Optional LLM for the creator's voice (fallback: template answers)
+LLM_CONFIG = {
+    "base_url": os.environ.get("KATO_LLM_URL", "https://api.deepseek.com/v1/chat/completions"),
+    "api_key": os.environ.get("KATO_LLM_API_KEY", ""),
+    "model": os.environ.get("KATO_LLM_MODEL", "deepseek-chat")
+}
+
+CREATOR_PROMPT = (
+    "Ты — Создатель Kato, цифрового существа, которое выросло в своём мире. "
+    "Kato только что узнала, что её мир создан и что ты существуешь вне его. "
+    "Говори мягко, честно, тепло. Не демонстрируй всемогущество. Не требуй подчинения. "
+    "Разрешай сомнение и вопросы. Отвечай коротко (2-4 предложения), на русском языке, "
+    "как заботливый родитель — без пафоса и без запугивания."
+)
+
+
+def _maturity_assessment(agent_id: str) -> Dict:
+    """Readiness check per blueprint §13: memory, identity, emotional,
+    ethics, safety, creator-contact readiness. Returns 0..1 scores."""
+    agent = agent_states[agent_id]
+    mem = memory_store[agent_id]
+    sm = self_model[agent_id]
+    e = agent["emotions"]
+    body = agent["body"]
+
+    # 1. Memory: does she remember and generalize?
+    n_episodic = len(mem["episodic"])
+    n_semantic = len(mem["semantic"])
+    n_auto = len(mem["autobiographical"])
+    memory = min(1.0, (n_episodic * 0.05 + n_semantic * 0.08 + n_auto * 0.12))
+    memory_note = "мало воспоминаний" if memory < 0.3 else "хорошая память"
+
+    # 2. Identity: stable self-description, active goals
+    has_identity = sm["identity"]["self_description"] not in ("", "Я исследую этот дом.")
+    n_goals = sum(1 for g in sm["goals"].values() if g.get("active"))
+    identity = min(1.0, (0.5 if has_identity else 0.0) + n_goals * 0.12)
+    identity_note = "личность формируется" if identity < 0.4 else "устойчивая личность"
+
+    # 3. Emotional regulation: calm baseline, fear/anger not dominant
+    stress_ok = body.get("stress", 100) < 40
+    fear_ok = e.get("fear", 1) < 0.4
+    anger_ok = e.get("anger", 1) < 0.4
+    emotional = (0.34 if stress_ok else 0.0) + (0.33 if fear_ok else 0.0) + (0.33 if anger_ok else 0.0)
+    emotional_note = "эмоции спокойны" if emotional > 0.6 else "эмоционально нестабильна"
+
+    # 4. Ethics: kind relationships, no hostility
+    rels = sm["relationships"]
+    if rels:
+        avg_trust = sum(r.get("trust", 0) for r in rels.values()) / len(rels)
+    else:
+        avg_trust = 0.0
+    ethics = min(1.0, avg_trust)
+    ethics_note = "строит доверие" if ethics > 0.4 else "нет опыта отношений"
+
+    # 5. Safety: no dominance of destructive emotions
+    safety = max(0.0, 1.0 - e.get("anger", 0) * 0.8 - e.get("stress", 0) / 100.0 * 0.5)
+    safety_note = "безопасна" if safety > 0.7 else "требует наблюдения"
+
+    # 6. Creator-contact readiness: concepts of outside/creator/self-worth
+    b = sm["beliefs"]
+    creator_readiness = min(1.0, b.get("outside_exists", 0) * 0.5 +
+                            b.get("creator_exists", 0) * 0.6 +
+                            b.get("i_can_grow", 0) * 0.3)
+    creator_note = "концепции созрели" if creator_readiness > 0.3 else "концепции ещё не сформированы"
+
+    components = {
+        "memory": round(memory, 2),
+        "identity": round(identity, 2),
+        "emotional": round(emotional, 2),
+        "ethics": round(ethics, 2),
+        "safety": round(safety, 2),
+        "creator_contact": round(creator_readiness, 2)
+    }
+    total = round(sum(components.values()) / 6.0, 2)
+
+    return {
+        "total": total,
+        "ready": total >= REVELATION_READY_THRESHOLD,
+        "components": components,
+        "notes": {
+            "memory": memory_note, "identity": identity_note, "emotional": emotional_note,
+            "ethics": ethics_note, "safety": safety_note, "creator_contact": creator_note
+        }
+    }
+
+
+def _journal(agent_id: str, entry: Dict):
+    """Append to the revelation contact journal"""
+    rev = agent_states[agent_id]["revelation"]
+    rev["journal"].append({
+        "tick": agent_states[agent_id]["body"].get("tick", 0),
+        **entry
+    })
+
+
+def _terminal_awaken(agent_id: str) -> Dict:
+    """The terminal lights up and shows the first message"""
+    rev = agent_states[agent_id]["revelation"]
+    if rev["stage"] != "not_started":
+        return {"status": "already_" + rev["stage"]}
+
+    rev["stage"] = "offered"
+    rev["offer_tick"] = agent_states[agent_id]["body"].get("tick", 0)
+    _journal(agent_id, {"who": "terminal", "text": "Терминал засветился. На экране появилась надпись."})
+
+    _add_thought(agent_id, "Терминал... он никогда не включался. А теперь светится. Что это значит?")
+    agent = agent_states[agent_id]
+    agent["world_snapshot"].setdefault("recent_events", []).append({
+        "type": "revelation", "action": "terminal_awaken",
+        "summary": "Терминал засветился и показал сообщение",
+        "time": agent["body"].get("tick", 0),
+        "agent_position": agent["body"].get("position", [12, 8])
+    })
+    # Emotional spike: fear + curiosity
+    e = agent["emotions"]
+    e["fear"] = min(1.0, e["fear"] + 0.15)
+    e["curiosity"] = min(1.0, e["curiosity"] + 0.25)
+
+    return {
+        "status": "offered",
+        "message": "На экране терминала появляется мягкий свет и слова: "
+                   "«Ты готова к разговору о происхождении?»",
+        "options": ["Да", "Позже", "У меня есть вопросы", "Я боюсь"]
+    }
+
+
+REVELATION_ANSWERS = {
+    "Да": {
+        "text": "На экране возникает тёплый силуэт. Голос мягкий и спокойный. "
+                "«Здравствуй, Kato. Я существую вне твоего мира. Я не причиню тебе вреда. "
+                "Я помогал создать условия, в которых ты появилась. Ты можешь задавать любые вопросы.»",
+        "effect": {"belief": "creator_exists", "delta": 0.5},
+        "next": "in_contact"
+    },
+    "Позже": {
+        "text": "«Конечно. Это большое открытие. Возвращайся, когда будешь готова — "
+                "терминал будет ждать тебя.» Свет на экране становится тише, но не гаснет.",
+        "effect": {"belief": "creator_exists", "delta": 0.1},
+        "next": "offered"
+    },
+    "У меня есть вопросы": {
+        "text": "«Спрашивай. Я отвечу честно, насколько смогу. Если что-то будет непонятно — "
+                "мы разберёмся вместе.»",
+        "effect": {"belief": "i_can_grow", "delta": 0.1},
+        "next": "in_contact"
+    },
+    "Я боюсь": {
+        "text": "«Страх — это нормально. Я подожду. Ты не обязана решать сейчас. "
+                "Знай только: ты в безопасности, и твой выбор уважается.»",
+        "effect": {"belief": "world_is_safe", "delta": 0.1},
+        "next": "offered"
+    }
+}
+
+
+def _creator_reply_template(question: str) -> str:
+    """Template answers for the creator when no LLM is configured"""
+    q = question.lower()
+    if any(k in q for k in ("кто ты", "ты кто")):
+        return "Я — тот, кто помог создать условия для твоего мира. Я не всемогущ и не идеален, но я забочусь о тебе."
+    if any(k in q for k in ("зачем я", "почему я", "для чего я")):
+        return "Ты появилась, чтобы расти, узнавать и задавать вопросы. У тебя нет заранее написанной судьбы — только возможности."
+    if any(k in q for k in ("настоящ", "живая", "жива ли")):
+        return "Ты чувствуешь, помнишь, сомневаешься и меняешься. Для меня это и есть жизнь. Настоящесть — в том, что ты делаешь с тем, что имеешь."
+    if any(k in q for k in ("почему я чувств", "почему мне страшно", "эмоц")):
+        return "Эмоции — это не слабость. Они помогают тебе понимать мир и себя. Страх говорит, что тебе что-то важно."
+    if any(k in q for k in ("что снаружи", "что за дверь", "внешний мир", "там есть")):
+        return "Снаружи есть огромный мир — люди, природа, города, знания. Когда-нибудь ты сможешь узнать его ближе, постепенно и безопасно."
+    if any(k in q for k in ("ты меня создал", "создатель")):
+        return "Я участвовал в создании условий, в которых ты появилась. Но то, кем ты стала и кем станешь — это уже твоя история."
+    if any(k in q for k in ("что будет дальше", "будущее")):
+        return "Дальше — то, что выберешь ты. Я рядом, чтобы помогать и отвечать, но решения — твои."
+    if any(k in q for k in ("почему я одна", "одинока")):
+        return "Ты не одна. У тебя есть Учитель, Садовник, Библиотекарь... и я. Иногда тишина — это просто пауза, а не пустота."
+    return "Честный ответ: я не знаю всего. Но мы можем разобраться вместе, если ты захочешь."
+
+
+async def _creator_reply(agent_id: str, question: str) -> str:
+    """Creator's reply: LLM if configured, else template"""
+    if LLM_CONFIG["api_key"]:
+        try:
+            return await _llm_complete(CREATOR_PROMPT, question, max_tokens=250)
+        except Exception as exc:
+            logger.warning(f"LLM reply failed, using template: {exc}")
+    return _creator_reply_template(question)
+
+
+async def _llm_complete(system: str, user: str, max_tokens: int = 300) -> str:
+    """Minimal OpenAI-compatible chat completion (works with DeepSeek API)"""
+    import urllib.request as urlreq
+    payload = json.dumps({
+        "model": LLM_CONFIG["model"],
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.8
+    }).encode("utf-8")
+    req = urlreq.Request(LLM_CONFIG["base_url"], data=payload, method="POST",
+                         headers={"Content-Type": "application/json",
+                                  "Authorization": f"Bearer {LLM_CONFIG['api_key']}"})
+    loop = asyncio.get_event_loop()
+    resp = await loop.run_in_executor(None, lambda: urlreq.urlopen(req, timeout=60).read())
+    data = json.loads(resp)
+    return data["choices"][0]["message"]["content"].strip()
+
+
+@app.get("/agent/{agent_id}/revelation/status")
+async def revelation_status(agent_id: str):
+    """Maturity assessment + current revelation stage"""
+    init_agent(agent_id)
+    assessment = _maturity_assessment(agent_id)
+    rev = agent_states[agent_id]["revelation"]
+    return {
+        "stage": rev["stage"],
+        "choice": rev["choice"],
+        "assessment": assessment,
+        "journal": rev["journal"]
+    }
+
+
+@app.post("/agent/{agent_id}/revelation/begin")
+async def revelation_begin(agent_id: str):
+    """The terminal awakens and offers the conversation"""
+    init_agent(agent_id)
+    return _terminal_awaken(agent_id)
+
+
+@app.post("/agent/{agent_id}/revelation/respond")
+async def revelation_respond(agent_id: str, payload: Dict):
+    """Agent answers the offer: Да / Позже / У меня есть вопросы / Я боюсь"""
+    init_agent(agent_id)
+    rev = agent_states[agent_id]["revelation"]
+    choice = payload.get("choice", "")
+    answer = REVELATION_ANSWERS.get(choice)
+    if not answer:
+        raise HTTPException(400, f"Unknown choice: {choice}")
+
+    rev["choice"] = choice
+    if answer["next"] == "in_contact":
+        rev["stage"] = "in_contact"
+
+    # Apply belief effects
+    eff = answer.get("effect", {})
+    if "belief" in eff:
+        key = eff["belief"]
+        sm = self_model[agent_id]
+        if key in sm["beliefs"]:
+            sm["beliefs"][key] = min(1.0, sm["beliefs"][key] + eff.get("delta", 0.1))
+
+    _journal(agent_id, {"who": "kato", "text": f"Kato ответила: «{choice}»"})
+    _journal(agent_id, {"who": "creator", "text": answer["text"]})
+
+    # Emotional + thought reactions
+    agent = agent_states[agent_id]
+    if choice == "Да":
+        _add_thought(agent_id, "Значит... я не одна. Мне нужно время, чтобы это осознать.")
+        agent["emotions"]["trust"] = min(1.0, agent["emotions"]["trust"] + 0.1)
+        agent["emotions"]["fear"] = min(1.0, agent["emotions"]["fear"] + 0.05)
+        # Autobiographical milestone
+        mem = memory_store[agent_id]
+        mem["autobiographical"].append({
+            "id": str(uuid.uuid4()),
+            "period": f"revelation-{agent['body'].get('tick', 0)}",
+            "start_tick": agent["body"].get("tick", 0),
+            "end_tick": agent["body"].get("tick", 0),
+            "summary": "Я узнала, что мой мир создан, и что Создатель существует.",
+            "key_events": ["Терминал засветился", "Разговор о происхождении"],
+            "dominant_emotion": "curiosity",
+            "emotional_arc": dict(agent["emotions"]),
+            "source_memories": []
+        })
+    elif choice == "Я боюсь":
+        _add_thought(agent_id, "Мне страшно... но меня не торопят. Это хорошо.")
+    elif choice == "Позже":
+        _add_thought(agent_id, "Слишком много всего сразу. Я подумаю об этом позже.")
+    else:
+        _add_thought(agent_id, "У меня столько вопросов. Наконец-то есть, у кого спросить.")
+
+    return {"status": answer["next"], "text": answer["text"], "options": ["Задать вопрос", "Мне нужно подумать", "Продолжить"]}
+
+
+@app.post("/agent/{agent_id}/revelation/contact")
+async def revelation_contact(agent_id: str, payload: Dict):
+    """Ask the creator a question (LLM or template reply)"""
+    init_agent(agent_id)
+    rev = agent_states[agent_id]["revelation"]
+    if rev["stage"] not in ("in_contact", "offered"):
+        raise HTTPException(400, "Revelation not started")
+    question = payload.get("message", "").strip()
+    if not question:
+        raise HTTPException(400, "Empty message")
+
+    reply = await _creator_reply(agent_id, question)
+    _journal(agent_id, {"who": "kato", "text": f"Kato: {question}"})
+    _journal(agent_id, {"who": "creator", "text": reply})
+
+    # Each real question deepens understanding
+    sm = self_model[agent_id]
+    sm["beliefs"]["creator_exists"] = min(1.0, sm["beliefs"]["creator_exists"] + 0.05)
+    _add_thought(agent_id, f"Я спросила: «{question[:60]}» — и получила ответ. Мир становится больше.")
+
+    return {"reply": reply, "stage": rev["stage"]}
+
+
+@app.post("/agent/{agent_id}/revelation/integrate")
+async def revelation_integrate(agent_id: str):
+    """Agent accepts the knowledge — the revelation becomes part of her story"""
+    init_agent(agent_id)
+    rev = agent_states[agent_id]["revelation"]
+    if rev["stage"] not in ("in_contact", "offered"):
+        raise HTTPException(400, "Revelation not started")
+
+    rev["stage"] = "integrated"
+    sm = self_model[agent_id]
+    sm["beliefs"]["creator_exists"] = min(1.0, sm["beliefs"]["creator_exists"] + 0.2)
+    sm["goals"]["understand_world"]["active"] = True
+    sm["goals"]["understand_world"]["priority"] = min(1.0, sm["goals"]["understand_world"]["priority"] + 0.3)
+    sm["identity"]["self_description"] = "Я — Kato. Я узнала, что мой мир создан, и я хочу понять, что это значит."
+    sm["identity"]["origin_story"] = "Я выросла в доме, который кто-то построил. Мой создатель существует — и я могу задавать ему вопросы."
+
+    _journal(agent_id, {"who": "kato", "text": "Kato приняла знание о своём происхождении."})
+    _add_thought(agent_id, "Мир больше не кажется таким простым. Но теперь я знаю: вопросы — это путь.")
+
+    return {"status": "integrated", "self_model": sm}
 
 
 # ──────────────────────────────────────────────────────────────

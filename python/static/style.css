@@ -171,6 +171,21 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .dream-box .dream-whisper { color: var(--pink); }
 .hidden { display: none; }
 
+/* Revelation panel */
+#revelation-section { grid-column: 1 / -1; }
+.rev-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.rev-label { color: var(--dim); width: 90px; }
+.rev-components { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px 14px; margin-bottom: 8px; }
+.rev-comp { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.rev-comp > span { width: 90px; color: var(--text); }
+.rev-comp .bar-bg { height: 8px; }
+.rev-note { color: var(--dim); font-size: 10px; width: 130px; }
+.rev-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.rev-actions button { padding: 8px 12px; }
+.rev-chat { display: flex; gap: 8px; margin-bottom: 8px; }
+#rev-input { flex: 1; background: var(--panel2); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-family: inherit; }
+#rev-journal { max-height: 160px; }
+
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-track { background: var(--panel2); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }

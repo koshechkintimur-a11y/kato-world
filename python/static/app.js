@@ -51,6 +51,7 @@ async function poll() {
   if (sm) { selfModel = sm; renderSelf(); }
   if (answers) renderAnswers(answers);
   renderMemory();
+  renderRevelation();
 }
 
 // ── WORLD CANVAS ───────────────────────────────────────────────
@@ -518,6 +519,98 @@ $('ask-btn').addEventListener('click', async () => {
   const a = await api(`/agent/${AGENT}/self-model/answers`);
   if (a) renderAnswers(a);
 });
+
+// ── REVELATION PANEL ───────────────────────────────────────────
+const REV_STAGE_NAMES = {
+  not_started: 'не начато', offered: 'предложено', in_contact: 'контакт', integrated: 'интегрировано'
+};
+const REV_COMPONENT_NAMES = {
+  memory: 'Память', identity: 'Личность', emotional: 'Эмоции',
+  ethics: 'Этика', safety: 'Безопасность', creator_contact: 'Концепции'
+};
+
+async function renderRevelation() {
+  const rev = await api(`/agent/${AGENT}/revelation/status`);
+  if (!rev) return;
+  const stageEl = $('rev-stage');
+  stageEl.textContent = REV_STAGE_NAMES[rev.stage] || rev.stage;
+  stageEl.style.color = rev.stage === 'integrated' ? '#f0a6d2' : rev.stage === 'not_started' ? 'var(--dim)' : '#8a6ae0';
+
+  const a = rev.assessment || {};
+  $('rev-ready-bar').style.width = Math.round((a.total || 0) * 100) + '%';
+  $('rev-ready-pct').textContent = Math.round((a.total || 0) * 100) + '%';
+
+  const comps = $('rev-components');
+  comps.innerHTML = '';
+  for (const [key, val] of Object.entries(a.components || {})) {
+    const d = document.createElement('div');
+    d.className = 'rev-comp';
+    const note = (a.notes && a.notes[key]) || '';
+    d.innerHTML = `<span>${REV_COMPONENT_NAMES[key] || key}</span>
+      <div class="bar-bg" style="flex:1"><div class="bar-fill" style="width:${Math.round(val * 100)}%;background:${val > 0.5 ? '#7af0a0' : '#f5d76e'}"></div></div>
+      <span class="rev-note">${note}</span>`;
+    comps.appendChild(d);
+  }
+
+  // Show answer buttons only when offered/in_contact
+  const offered = rev.stage === 'offered' || rev.stage === 'in_contact';
+  $('rev-yes').classList.toggle('hidden', !offered || rev.stage === 'in_contact');
+  $('rev-later').classList.toggle('hidden', !offered);
+  $('rev-questions').classList.toggle('hidden', !offered || rev.stage === 'in_contact');
+  $('rev-fear').classList.toggle('hidden', !offered);
+
+  // Journal
+  const journal = $('rev-journal');
+  journal.innerHTML = '';
+  for (const j of (rev.journal || []).slice(-30)) {
+    const d = document.createElement('div');
+    d.className = 'evt-item';
+    const who = j.who === 'creator' ? '<b style="color:#f0a6d2">Создатель:</b>' :
+                j.who === 'terminal' ? '<b style="color:#8a6ae0">Терминал:</b>' :
+                '<b style="color:#7af0a0">Kato:</b>';
+    d.innerHTML = `${who} ${j.text || ''}`;
+    journal.appendChild(d);
+  }
+}
+
+async function revelationBegin() {
+  const r = await apiPost(`/agent/${AGENT}/revelation/begin`, {});
+  if (!r) return;
+  const box = $('rev-message');
+  box.classList.remove('hidden');
+  box.innerHTML = `<b style="color:#8a6ae0">🔮 ${r.message || ''}</b>`;
+  renderRevelation();
+}
+
+async function revelationRespond(choice) {
+  const r = await apiPost(`/agent/${AGENT}/revelation/respond`, { choice });
+  if (!r) return;
+  const box = $('rev-message');
+  box.classList.remove('hidden');
+  box.innerHTML = `<b style="color:#f0a6d2">${r.text || ''}</b>`;
+  renderRevelation();
+}
+
+async function revelationAsk() {
+  const input = $('rev-input');
+  const q = input.value.trim();
+  if (!q) return;
+  const r = await apiPost(`/agent/${AGENT}/revelation/contact`, { message: q });
+  input.value = '';
+  if (!r) return;
+  const box = $('rev-message');
+  box.classList.remove('hidden');
+  box.innerHTML = `<span style="color:#7af0a0">Kato: ${q}</span><br><b style="color:#f0a6d2">${r.reply || ''}</b>`;
+  renderRevelation();
+}
+
+$('rev-begin').addEventListener('click', revelationBegin);
+$('rev-yes').addEventListener('click', () => revelationRespond('Да'));
+$('rev-later').addEventListener('click', () => revelationRespond('Позже'));
+$('rev-questions').addEventListener('click', () => revelationRespond('У меня есть вопросы'));
+$('rev-fear').addEventListener('click', () => revelationRespond('Я боюсь'));
+$('rev-send').addEventListener('click', revelationAsk);
+$('rev-input').addEventListener('keydown', e => { if (e.key === 'Enter') revelationAsk(); });
 
 setInterval(poll, 1500);
 poll();
