@@ -584,10 +584,21 @@ function renderSelf() {
   const beliefs = $('beliefs');
   beliefs.innerHTML = '';
   const bnames = BELIEF_NAMES;
+  const ORIGIN_NAMES = {
+    default: { ru: 'по умолчанию', en: 'default' }, experience: { ru: 'опыт', en: 'experience' },
+    dialogue: { ru: 'диалог', en: 'dialogue' }, quest: { ru: 'квест', en: 'quest' },
+    dream: { ru: 'сон', en: 'dream' }, creator_injection: { ru: '☾ шёпот', en: '☾ whisper' },
+    reflection: { ru: 'рефлексия', en: 'reflection' }, portal: { ru: 'Дальнее окно', en: 'portal' },
+    revelation: { ru: 'раскрытие', en: 'revelation' }
+  };
   for (const [b, v] of Object.entries(selfModel.beliefs || {})) {
     const row = document.createElement('div');
     row.className = 'belief-row';
-    row.innerHTML = `<span class="bname">${lname(bnames, b)}</span>
+    const meta = (selfModel.belief_meta || {})[b] || {};
+    const origin = ORIGIN_NAMES[meta.origin] ? ORIGIN_NAMES[meta.origin][LANG] : (meta.origin || '');
+    const extMark = meta.external_injection ? ' <span style="color:#f0a6d2" title="external">☾</span>' : '';
+    const originMark = origin ? `<span class="borigin">· ${origin}${extMark}</span>` : '';
+    row.innerHTML = `<span class="bname">${lname(bnames, b)}${originMark}</span>
       <div class="bbar"><div class="bfill" style="width:${Math.round((v || 0) * 100)}%"></div></div>`;
     beliefs.appendChild(row);
   }

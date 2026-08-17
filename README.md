@@ -57,6 +57,13 @@ ollama pull qwen2.5:7b-instruct   # ~4.7 GB, полностью влезает �
 export KATO_LLM_API_KEY=...   # → будет использован DeepSeek (или свой KATO_LLM_URL/KATO_LLM_MODEL)
 ```
 
+Тесты ядра (без сервера и LLM):
+
+```bash
+cd python
+python3 tests/test_core.py   # 13 тестов: эмоции, System 2, консолидация, персистентность, гейтинг, provenance
+```
+
 Godot-клиент: открой `godot/project.godot` в Godot 4.2+ и запусти.
 
 ---

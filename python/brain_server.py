@@ -131,7 +131,12 @@ def init_agent(agent_id: str):
                 "energy": 100.0, "stress": 0.0, "arousal": 0.3,
                 "reward": 0.5, "safety": 0.8, "social": 0.4, "pain": 0.0
             },
-            "goals": ["explore", "learn", "survive"],
+            "goals": {
+                "explore": {"priority": 0.6, "active": True},
+                "learn": {"priority": 0.5, "active": True},
+                "survive": {"priority": 0.4, "active": True}
+            },
+            "npc_interactions": {},   # per-agent interaction counters (persisted)
             "beliefs": {
                 "world_is_safe": 0.7, "outside_exists": 0.1, "creator_exists": 0.0
             },
@@ -441,7 +446,8 @@ def _update_hormones(agent_id: str, body: Dict):
     h = agent["hormones"]
     h["energy"] = body["energy"]
     h["stress"] = body["stress"]
-    h["arousal"] = min(100.0, h["arousal"] + body["stress"] * 0.01)
+    # Arousal: rises with stress, decays back toward baseline (0.3)
+    h["arousal"] = min(100.0, h["arousal"] * 0.96 + 0.3 * 0.04 + body["stress"] * 0.01)
     h["reward"] = body["comfort"] * 0.5
     h["safety"] = max(0.0, 100.0 - body["stress"])
     h["pain"] = max(0.0, 100.0 - body["integrity"])
@@ -500,14 +506,13 @@ def _update_emotions(agent_id: str, perception: PerceptionPayload):
                       friendly_npcs * 0.08 +
                       (0.1 if body["energy"] > 50 else 0.0))
     
-    # Attachment: slowly grows from repeated NPC presence (kept separate)
-    if not hasattr(_update_emotions, "_npc_interactions"):
-        _update_emotions._npc_interactions = {}
+    # Attachment: slowly grows from repeated NPC presence (per-agent, persisted)
+    interactions = agent.setdefault("npc_interactions", {})
     for npc in perception.nearby_npcs:
         nid = npc.get("id", "")
         if nid:
-            _update_emotions._npc_interactions[nid] = _update_emotions._npc_interactions.get(nid, 0) + 1
-    attachment_drive = min(0.6, sum(1 for n in _update_emotions._npc_interactions.values() if n > 10) * 0.2)
+            interactions[nid] = interactions.get(nid, 0) + 1
+    attachment_drive = min(0.6, sum(1 for n in interactions.values() if n > 10) * 0.2)
     
     # ── HOMEOSTATIC UPDATE ───────────────────────────────────────
     # Fast emotions (joy/fear/anger/sadness): quick convergence
@@ -881,13 +886,12 @@ def _extract_semantic_tags(mem: Dict) -> List[str]:
 
 def _update_beliefs_from_memory(agent_id: str, semantic: Dict):
     knowledge = semantic["knowledge"]
-    agent = agent_states[agent_id]
     if "восстанавливают" in knowledge:
-        agent["beliefs"]["world_is_safe"] = min(1.0, agent["beliefs"]["world_is_safe"] + 0.02)
+        _record_belief(agent_id, "world_is_safe", delta=0.02, reason="знание о восстановлении", origin="reflection")
     if "ведут в другие" in knowledge:
-        agent["beliefs"]["outside_exists"] = min(1.0, agent["beliefs"]["outside_exists"] + 0.05)
+        _record_belief(agent_id, "outside_exists", delta=0.05, reason="знание о других местах", origin="reflection")
     if "делятся знаниями" in knowledge:
-        agent["beliefs"]["world_is_safe"] = min(1.0, agent["beliefs"]["world_is_safe"] + 0.01)
+        _record_belief(agent_id, "world_is_safe", delta=0.01, reason="знание о доброте", origin="reflection")
 
 # ──────────────────────────────────────────────────────────────
 # AUTOBIOGRAPHICAL MEMORY (Life Narrative)
@@ -1038,9 +1042,9 @@ def _learn_from_action(agent_id: str, result: ActionResult):
     success = result.success
     
     if action == "sleep" and success:
-        agent["beliefs"]["world_is_safe"] = min(1.0, agent["beliefs"]["world_is_safe"] + 0.05)
+        _record_belief(agent_id, "world_is_safe", delta=0.05, reason="успешное действие", origin="experience")
     if action == "talk" and success:
-        agent["beliefs"]["outside_exists"] = min(1.0, agent["beliefs"]["outside_exists"] + 0.02)
+        _record_belief(agent_id, "outside_exists", delta=0.02, reason="успешное действие", origin="experience")
     
     if success:
         agent["hormones"]["reward"] = min(100.0, agent["hormones"]["reward"] + 5.0)
@@ -1162,19 +1166,64 @@ def _update_self_model(agent_id: str, perception: PerceptionPayload):
             # Blend gently toward self-model (self-model is the long-term memory)
             agent["beliefs"][k] = agent["beliefs"][k] * 0.9 + sm["beliefs"][k] * 0.1
 
+def _record_belief(agent_id: str, key: str, delta: float = None, value: float = None,
+                   reason: str = "", origin: str = "experience", external: bool = False) -> float:
+    """Update a belief + record provenance (observer layer — hidden from Kato).
+    Origins: default|experience|dialogue|quest|dream|creator_injection|reflection|portal|revelation"""
+    sm = self_model[agent_id]
+    beliefs = sm["beliefs"]
+    old = beliefs.get(key, 0.0)
+    if value is not None:
+        new = min(1.0, max(0.0, value))
+    else:
+        new = min(1.0, max(0.0, old + (delta or 0.0)))
+    beliefs[key] = new
+    # Keep the fast agent-side beliefs cache in sync
+    fast = agent_states[agent_id].get("beliefs")
+    if isinstance(fast, dict) and key in fast:
+        fast[key] = new
+
+    tick = agent_states[agent_id]["body"].get("tick", 0)
+    meta = sm.setdefault("belief_meta", {})
+    m = meta.setdefault(key, {
+        "origin": origin, "external_injection": external, "confidence": 0.4,
+        "created_at": tick, "updated_at": tick, "history": []
+    })
+    if external:
+        m["external_injection"] = True
+        m["origin"] = "creator_injection"
+    elif m["origin"] == "creator_injection":
+        pass  # first injection stays labeled forever
+    else:
+        m["origin"] = origin
+    m["updated_at"] = tick
+    m["history"].append({"tick": tick, "value": round(new, 3), "reason": reason[:80]})
+    m["history"] = m["history"][-20:]
+    m["confidence"] = min(1.0, (m["confidence"] + 0.03) if abs(new - old) > 0.001 else m["confidence"] * 0.999)
+    return new
+
+
 def _update_self_model_from_dream(agent_id: str, dream: Dict):
     """Dreams update beliefs and values (divine whispers become intuitions)"""
     model = self_model[agent_id]
+    # Was there a divine whisper in this dream? → external injection, but Kato
+    # experiences it as her own insight. Provenance is observer-only.
+    has_whisper = bool(dream.get("divine_whispers"))
+    origin = "creator_injection" if has_whisper else "dream"
     for insight in dream.get("insights", []):
         low = insight.lower()
         if any(k in low for k in ("внешн", "за стеной", "наружу", "окн", "свет", "больше, чем этот дом", "что-то есть")):
-            model["beliefs"]["outside_exists"] = min(1.0, model["beliefs"]["outside_exists"] + 0.1)
+            _record_belief(agent_id, "outside_exists", delta=0.1, reason="инсайт сна",
+                           origin=origin, external=has_whisper)
         if any(k in low for k in ("безопас", "защища")):
-            model["beliefs"]["world_is_safe"] = min(1.0, model["beliefs"]["world_is_safe"] + 0.05)
+            _record_belief(agent_id, "world_is_safe", delta=0.05, reason="инсайт сна",
+                           origin=origin, external=has_whisper)
         if any(k in low for k in ("создатель", "кто-то есть")):
-            model["beliefs"]["creator_exists"] = min(1.0, model["beliefs"]["creator_exists"] + 0.1)
+            _record_belief(agent_id, "creator_exists", delta=0.1, reason="инсайт сна",
+                           origin=origin, external=has_whisper)
         if any(k in low for k in ("вопрос", "значение", "раст", "расту")):
-            model["beliefs"]["i_can_grow"] = min(1.0, model["beliefs"]["i_can_grow"] + 0.05)
+            _record_belief(agent_id, "i_can_grow", delta=0.05, reason="инсайт сна",
+                           origin=origin, external=has_whisper)
     
     # Dreams with positive valence reinforce kindness value
     if dream.get("emotions", {}).get("trust", 0) > 0.4:
@@ -1484,7 +1533,7 @@ def _apply_dialogue_effects(agent_id: str, effect: Dict):
     if "belief" in effect:
         key = effect["belief"]
         if key in model["beliefs"]:
-            model["beliefs"][key] = min(1.0, max(0.0, model["beliefs"][key] + effect.get("delta", 0.05)))
+            _record_belief(agent_id, key, delta=effect.get("delta", 0.05), reason="диалог с NPC", origin="dialogue")
     if "quest" in effect:
         qid = effect["quest"]
         agent = agent_states[agent_id]
@@ -1591,7 +1640,7 @@ async def complete_quest(payload: Dict):
         crafted = {o["id"] for o in objects if o.get("type") in ("furniture", "device", "container", "tool", "portal")}
         if len(grown) >= 3 and len(crafted) >= 3:
             quests[quest_id]["completed"] = True
-            self_model[agent_id]["beliefs"]["i_can_grow"] = min(1.0, self_model[agent_id]["beliefs"]["i_can_grow"] + 0.15)
+            _record_belief(agent_id, "i_can_grow", delta=0.15, reason="квест выполнен", origin="quest")
             self_model[agent_id]["values"]["curiosity"] = min(1.0, self_model[agent_id]["values"]["curiosity"] + 0.1)
             _add_thought(agent_id, "Я нашла! Три выросших и три созданных. Теперь я вижу мир яснее.")
             return {"status": "completed", "reward": "belief.i_can_grow +0.15"}
@@ -1694,7 +1743,13 @@ def _maturity_assessment(agent_id: str) -> Dict:
     n_episodic = len(mem["episodic"])
     n_semantic = len(mem["semantic"])
     n_auto = len(mem["autobiographical"])
-    memory = min(1.0, (n_episodic * 0.05 + n_semantic * 0.08 + n_auto * 0.12))
+    # Logarithmic saturation + diversity: 20 varied events ≠ 20 identical ones
+    uniq_tags = len({t for m in mem["episodic"] for t in m.get("tags", [])})
+    uniq_npcs = len({m.get("who", "") for m in mem["episodic"] if m.get("who")})
+    diversity = min(1.0, (uniq_tags * 0.06 + uniq_npcs * 0.08))
+    memory = min(1.0, 0.5 * math.log2(1 + n_episodic) / math.log2(51) +
+                      0.3 * math.log2(1 + n_semantic) / math.log2(31) +
+                      0.2 * diversity)
     memory_note = "мало воспоминаний" if memory < 0.3 else "хорошая память"
 
     # 2. Identity: stable self-description, active goals
@@ -1719,8 +1774,9 @@ def _maturity_assessment(agent_id: str) -> Dict:
     ethics = min(1.0, avg_trust)
     ethics_note = "строит доверие" if ethics > 0.4 else "нет опыта отношений"
 
-    # 5. Safety: no dominance of destructive emotions
-    safety = max(0.0, 1.0 - e.get("anger", 0) * 0.8 - e.get("stress", 0) / 100.0 * 0.5)
+    # 5. Safety: no dominance of destructive emotions + low body stress
+    body_stress = body.get("stress", 0) / 100.0
+    safety = max(0.0, 1.0 - e.get("anger", 0) * 0.8 - body_stress * 0.5)
     safety_note = "безопасна" if safety > 0.7 else "требует наблюдения"
 
     # 6. Creator-contact readiness: concepts of outside/creator/self-worth
@@ -1761,10 +1817,18 @@ def _journal(agent_id: str, entry: Dict):
 
 
 def _terminal_awaken(agent_id: str) -> Dict:
-    """The terminal lights up and shows the first message"""
+    """The terminal lights up and shows the first message (maturity-gated)"""
     rev = agent_states[agent_id]["revelation"]
     if rev["stage"] != "not_started":
         return {"status": "already_" + rev["stage"]}
+
+    # Maturity gate: the terminal stays silent until Kato is ready
+    assessment = _maturity_assessment(agent_id)
+    if assessment["total"] < REVELATION_READY_THRESHOLD:
+        return {"status": "not_ready",
+                "message": "Терминал в кабинете тихо гудит, но экран остаётся тёмным. "
+                           f"Учитель говорит: «Ему нужно время. И тебе тоже.» (готовность {assessment['total']:.2f})",
+                "assessment": assessment}
 
     rev["stage"] = "offered"
     rev["offer_tick"] = agent_states[agent_id]["body"].get("tick", 0)
@@ -2047,7 +2111,7 @@ async def revelation_respond(agent_id: str, payload: Dict):
         key = eff["belief"]
         sm = self_model[agent_id]
         if key in sm["beliefs"]:
-            sm["beliefs"][key] = min(1.0, sm["beliefs"][key] + eff.get("delta", 0.1))
+            _record_belief(agent_id, key, delta=eff.get("delta", 0.1), reason="обработка сна", origin="dream")
 
     _journal(agent_id, {"who": "kato", "text": f"Kato ответила: «{choice}»"})
     _journal(agent_id, {"who": "creator", "text": answer["text"]})
@@ -2098,7 +2162,7 @@ async def revelation_contact(agent_id: str, payload: Dict):
 
     # Each real question deepens understanding
     sm = self_model[agent_id]
-    sm["beliefs"]["creator_exists"] = min(1.0, sm["beliefs"]["creator_exists"] + 0.05)
+    _record_belief(agent_id, "creator_exists", delta=0.05, reason="учитель о создателях", origin="dialogue")
     _add_thought(agent_id, f"Я спросила: «{question[:60]}» — и получила ответ. Мир становится больше.")
 
     return {"reply": reply, "stage": rev["stage"]}
@@ -2114,7 +2178,7 @@ async def revelation_integrate(agent_id: str):
 
     rev["stage"] = "integrated"
     sm = self_model[agent_id]
-    sm["beliefs"]["creator_exists"] = min(1.0, sm["beliefs"]["creator_exists"] + 0.2)
+    _record_belief(agent_id, "creator_exists", delta=0.2, reason="раскрытие интегрировано", origin="revelation")
     sm["goals"]["understand_world"]["active"] = True
     sm["goals"]["understand_world"]["priority"] = min(1.0, sm["goals"]["understand_world"]["priority"] + 0.3)
     sm["identity"]["self_description"] = "Я — Kato. Я узнала, что мой мир создан, и я хочу понять, что это значит."
@@ -2301,8 +2365,8 @@ async def portal_read(agent_id: str, payload: Dict):
     })
     sm = self_model[agent_id]
     if cid in ("sky", "nature", "people", "ocean", "music"):
-        sm["beliefs"]["outside_exists"] = min(1.0, sm["beliefs"]["outside_exists"] + 0.04)
-    sm["beliefs"]["i_can_grow"] = min(1.0, sm["beliefs"]["i_can_grow"] + 0.02)
+        _record_belief(agent_id, "outside_exists", delta=0.04, reason="чтение Дальнего окна", origin="portal")
+    _record_belief(agent_id, "i_can_grow", delta=0.02, reason="чтение Дальнего окна", origin="portal")
     agent["body"]["energy"] = max(0.0, agent["body"].get("energy", 100) - PORTAL_READ_ENERGY_COST)
 
     _portal_journal(agent_id, {"who": "kato", "category": cid, "article_id": article["id"],
@@ -2725,9 +2789,10 @@ def _serializable_memories(mem: Dict) -> Dict:
     return out
 
 
-def _save_state():
+def _save_state(path: str = None):
     try:
-        os.makedirs(_DATA_DIR, exist_ok=True)
+        path = path or os.path.join(_DATA_DIR, _STATE_FILE)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         payload = {
             "saved_at": time.time(),
             "agents": {aid: json.loads(json.dumps(agent, ensure_ascii=False, default=str))
@@ -2738,20 +2803,21 @@ def _save_state():
             "quests": _quests,
             "dialogue_states": _dialogue_states
         }
-        tmp = STATE_FILE + ".tmp"
+        tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=1, default=str)
-        os.replace(tmp, STATE_FILE)
+        os.replace(tmp, path)
         logger.info(f"State saved ({len(agent_states)} agents)")
     except Exception as exc:
         logger.warning(f"State save failed: {exc}")
 
 
-def _load_state():
+def _load_state(path: str = None):
     try:
-        if not os.path.isfile(STATE_FILE):
+        path = path or os.path.join(_DATA_DIR, _STATE_FILE)
+        if not os.path.isfile(path):
             return
-        with open(STATE_FILE, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             payload = json.load(f)
         for aid, agent in payload.get("agents", {}).items():
             agent_states[aid] = agent
@@ -2760,6 +2826,10 @@ def _load_state():
             # Legacy states may lack body position
             agent.setdefault("body", {})
             agent["body"].setdefault("position", [12, 8])
+            # Legacy states had goals as a list — normalize to dict
+            if isinstance(agent.get("goals"), list):
+                agent["goals"] = {g: {"priority": 0.5, "active": True} for g in agent["goals"]}
+            agent.setdefault("npc_interactions", {})
         for aid, sm in payload.get("self_models", {}).items():
             self_model[aid] = sm
         for aid, mem in payload.get("memories", {}).items():
