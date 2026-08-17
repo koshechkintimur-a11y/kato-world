@@ -14,6 +14,8 @@ import uuid
 import logging
 import math
 import os
+import random
+import time
 from pathlib import Path
 from collections import defaultdict
 
@@ -136,7 +138,14 @@ def init_agent(agent_id: str):
             "relationships": {},
             "working_memory": [],
             "current_goal": "explore",
-            "last_sleep_tick": 0
+            "last_sleep_tick": 0,
+            # Background daemon state
+            "sleeping": False,
+            "sleep_ticks_remaining": 0,
+            "last_perception_real_time": 0.0,
+            "headless_ticks": 0,
+            "thoughts": [],          # inner monologue (recent)
+            "last_reflection_tick": 0
         }
         
         # Initialize all memory systems
@@ -234,6 +243,9 @@ async def register_agent(registration: AgentRegistration):
 async def receive_perception(perception: PerceptionPayload):
     agent_id = perception.agent_id
     init_agent(agent_id)
+    
+    # Mark live connection (disables headless autonomous mode)
+    agent_states[agent_id]["last_perception_real_time"] = time.time()
     
     agent_states[agent_id]["body"] = perception.agent
     _update_hormones(agent_id, perception.agent)
@@ -1296,6 +1308,323 @@ def _interpret_whisper(whisper: Dict, emotional_state: Dict) -> str:
     if "вопрос" in content or "question" in content:
         return "Твои вопросы имеют значение."
     return "Тихий голос, указывающий путь."
+
+# ──────────────────────────────────────────────────────────────
+# BACKGROUND DAEMON (sleep/wake, autonomous headless life, reflection)
+# ──────────────────────────────────────────────────────────────
+
+DAEMON_INTERVAL = 5.0            # seconds of real time per daemon tick
+HEADLESS_TIMEOUT = 30.0          # no perception for this long → autonomous mode
+SLEEP_ENERGY_THRESHOLD = 20.0    # energy below → agent wants to sleep
+SLEEP_DURATION_TICKS = 10        # daemon ticks of sleep (~50 s)
+REFLECT_EVERY_TICKS = 8          # headless ticks between reflections
+THOUGHT_HISTORY = 12             # how many thoughts to keep
+
+# Walkable area (the house + garden; roughly matches the Godot world)
+_HOUSE_X = (2, 15)
+_HOUSE_Y = (2, 15)
+_GARDEN_Y_MAX = 29
+
+
+def _add_thought(agent_id: str, text: str):
+    """Record an inner monologue thought + emit it as an event for observers"""
+    agent = agent_states[agent_id]
+    agent["thoughts"].append({"tick": agent["body"].get("tick", 0), "text": text})
+    agent["thoughts"] = agent["thoughts"][-THOUGHT_HISTORY:]
+    snap = agent.get("world_snapshot", {})
+    events = snap.setdefault("recent_events", [])
+    events.append({"type": "thought", "action": "think", "summary": text,
+                   "time": agent["body"].get("tick", 0),
+                   "agent_position": agent["body"].get("position", [12, 8])})
+    snap["recent_events"] = events[-50:]
+
+
+def _inner_thought(agent_id: str) -> str:
+    """Generate a short inner monologue from current body/emotions"""
+    agent = agent_states[agent_id]
+    body = agent["body"]
+    e = agent["emotions"]
+    thoughts = []
+
+    if body.get("energy", 100) < 30:
+        thoughts.append("Я так устала... надо отдохнуть.")
+    if e.get("fear", 0) > 0.5:
+        thoughts.append("Мне страшно. Хочется, чтобы кто-то был рядом.")
+    if e.get("anger", 0) > 0.4:
+        thoughts.append("Не получается! Но я не сдадусь.")
+    if e.get("curiosity", 0) > 0.6:
+        thoughts.append("Интересно, что там дальше? Надо посмотреть.")
+    if e.get("joy", 0) > 0.5:
+        thoughts.append("Хорошо, когда всё спокойно.")
+    if e.get("sadness", 0) > 0.4:
+        thoughts.append("Почему-то грустно...")
+    if body.get("comfort", 100) < 40:
+        thoughts.append("Здесь неуютно. Может, пойти к кровати?")
+
+    if not thoughts:
+        thoughts.append("Всё как обычно. Тишина и покой.")
+
+    return random.choice(thoughts)
+
+
+def _build_headless_perception(agent_id: str, tick: int, action_event: Dict) -> PerceptionPayload:
+    """Build a PerceptionPayload from the world snapshot (autonomous mode)"""
+    agent = agent_states[agent_id]
+    snap = agent.get("world_snapshot", {})
+    pos = agent["body"].get("position", [12, 8])
+
+    nearby_objects = [o for o in snap.get("objects", [])
+                      if abs(o["position"][0] - pos[0]) <= 5 and abs(o["position"][1] - pos[1]) <= 5]
+    nearby_npcs = [n for n in snap.get("npcs", [])
+                   if abs(n["position"][0] - pos[0]) <= 5 and abs(n["position"][1] - pos[1]) <= 5]
+
+    events = snap.get("recent_events", [])[-10:]
+    if action_event:
+        events = events + [action_event]
+
+    return PerceptionPayload(
+        agent_id=agent_id,
+        tick=tick,
+        time_of_day=(tick % 2400) / 2400.0,
+        agent=agent["body"],
+        nearby_objects=nearby_objects,
+        nearby_npcs=nearby_npcs,
+        recent_events=events
+    )
+
+
+def _headless_step(agent_id: str):
+    """One autonomous life step: wander, act, feel (used when no client connected)"""
+    agent = agent_states[agent_id]
+    body = agent["body"]
+    tick = int(body.get("tick", 0)) + 1
+    body["tick"] = tick
+
+    pos = body.get("position", [12, 8])
+    px, py = pos[0], pos[1]
+
+    # Random walk with home bias (prefer inside the house)
+    dx, dy = random.choice([(0, -1), (0, 1), (-1, 0), (1, 0), (0, 0), (0, 0)])
+    nx, ny = px + dx, py + dy
+    # Stay in bounds; walkable area
+    if not (_HOUSE_X[0] - 8 <= nx <= 24 and 0 <= ny <= _GARDEN_Y_MAX):
+        nx, ny = px, py
+    body["position"] = [nx, ny]
+
+    # Pick an occasional action
+    action_event = None
+    e = agent["emotions"]
+    r = random.random()
+    action = None
+    if r < 0.15 and e.get("curiosity", 0) > 0.5:
+        action = {"type": "action", "action": "explore",
+                  "result": {"success": True},
+                  "time": tick, "agent_position": [nx, ny], "novel": True}
+    elif r < 0.25 and body.get("energy", 100) < 60:
+        action = {"type": "action", "action": "rest",
+                  "result": {"success": True},
+                  "time": tick, "agent_position": [nx, ny]}
+    elif r < 0.30:
+        nearby = [n for n in agent.get("world_snapshot", {}).get("npcs", [])
+                  if abs(n["position"][0] - nx) <= 2 and abs(n["position"][1] - ny) <= 2]
+        if nearby:
+            action = {"type": "action", "action": "talk", "npc_id": nearby[0]["id"],
+                      "result": {"success": True},
+                      "time": tick, "agent_position": [nx, ny]}
+    if action:
+        action_event = action
+
+    # Run the standard perception pipeline on the synthetic perception
+    perception = _build_headless_perception(agent_id, tick, action_event)
+    _update_hormones(agent_id, body)
+    _update_emotions(agent_id, perception)
+    _update_working_memory(agent_id, perception)
+    _check_memory_formation(agent_id, perception)
+    _update_self_model(agent_id, perception)
+
+    # Passive energy drain
+    body["energy"] = max(0.0, body["energy"] - 0.35)
+    if body["energy"] < 25:
+        body["stress"] = min(100.0, body["stress"] + 0.3)
+
+    # Store the snapshot for observers
+    snap = agent.get("world_snapshot", {})
+    snap["tick"] = tick
+    snap["time_of_day"] = perception.time_of_day
+    snap["agent_position"] = [nx, ny]
+    if action_event:
+        events = snap.setdefault("recent_events", [])
+        events.append(action_event)
+        snap["recent_events"] = events[-50:]
+
+    # Occasional inner monologue
+    if random.random() < 0.25:
+        _add_thought(agent_id, _inner_thought(agent_id))
+
+    agent["headless_ticks"] += 1
+    return tick
+
+
+def _start_sleep(agent_id: str):
+    """Begin a sleep cycle: dream with divine whispers, then recover"""
+    agent = agent_states[agent_id]
+    if agent.get("sleeping"):
+        return
+    agent["sleeping"] = True
+    agent["sleep_ticks_remaining"] = SLEEP_DURATION_TICKS
+
+    _add_thought(agent_id, "Глаза закрываются... я засыпаю.")
+    snap = agent.get("world_snapshot", {})
+    snap.setdefault("recent_events", []).append({
+        "type": "sleep", "action": "sleep", "summary": "Kato засыпает",
+        "time": agent["body"].get("tick", 0),
+        "agent_position": agent["body"].get("position", [12, 8])
+    })
+
+    # Process the dream immediately (whispers + memory consolidation)
+    whispers = [w for w in divine_whispers
+                if w["agent_id"] == agent_id and not w.get("processed_in_dream")]
+    dream = _generate_dream(agent_id, snap.get("recent_events", [])[-10:],
+                            agent["emotions"], whispers)
+    for w in whispers:
+        w["processed_in_dream"] = True
+    _update_self_model_from_dream(agent_id, dream)
+
+    # Queue consolidation (async fire-and-forget)
+    recent_episodic = [m for m in memory_store[agent_id]["episodic"]
+                       if m.get("time", 0) > agent.get("last_sleep_tick", 0)
+                       and m.get("importance", 0) > 0.5]
+    if recent_episodic:
+        asyncio.get_event_loop().create_task(_consolidate_memories(agent_id, recent_episodic))
+        _form_autobiographical_entry(agent_id, recent_episodic)
+        agent["last_sleep_tick"] = max(m.get("time", 0) for m in recent_episodic)
+
+    # Dream insights become waking thoughts
+    for insight in dream.get("insights", [])[:2]:
+        agent["thoughts"].append({"tick": agent["body"].get("tick", 0),
+                                  "text": "Мне приснилось: " + insight, "from_dream": True})
+    agent["thoughts"] = agent["thoughts"][-THOUGHT_HISTORY:]
+
+
+def _sleep_tick(agent_id: str):
+    """One tick of sleep: recover energy, calm stress"""
+    agent = agent_states[agent_id]
+    body = agent["body"]
+    body["energy"] = min(100.0, body.get("energy", 0) + 12.0)
+    body["stress"] = max(0.0, body.get("stress", 0) - 8.0)
+    body["comfort"] = min(100.0, body.get("comfort", 0) + 5.0)
+    agent["sleep_ticks_remaining"] -= 1
+
+
+def _wake_up(agent_id: str):
+    """End sleep cycle"""
+    agent = agent_states[agent_id]
+    agent["sleeping"] = False
+    agent["sleep_ticks_remaining"] = 0
+    _add_thought(agent_id, "Я проснулась. Что-то изменилось... или это просто утро?")
+    snap = agent.get("world_snapshot", {})
+    snap.setdefault("recent_events", []).append({
+        "type": "wake", "action": "wake", "summary": "Kato проснулась",
+        "time": agent["body"].get("tick", 0),
+        "agent_position": agent["body"].get("position", [12, 8])
+    })
+
+
+async def _reflect(agent_id: str):
+    """Periodic reflection: consolidate salient events into semantic memory"""
+    agent = agent_states[agent_id]
+    mem = memory_store[agent_id]
+
+    new_salient = [m for m in mem["episodic"]
+                   if m.get("time", 0) > agent.get("last_reflection_tick", 0)
+                   and m.get("importance", 0) > 0.55]
+    if not new_salient:
+        return
+
+    await _consolidate_memories(agent_id, new_salient)
+    agent["last_reflection_tick"] = max(m.get("time", 0) for m in new_salient)
+
+    # Draw a lesson from the most important event
+    top = max(new_salient, key=lambda m: m.get("importance", 0))
+    what = top.get("what", "")
+    if "не получилось" in what or (top.get("tags") and "failure" in top.get("tags")):
+        _add_thought(agent_id, "Почему не получилось? В следующий раз попробую иначе.")
+    elif "книг" in what or "чита" in what:
+        _add_thought(agent_id, "Книги — как окна. За каждым что-то есть.")
+    elif top.get("who"):
+        _add_thought(agent_id, f"Кажется, {top['who']} — хороший. Мне с ними спокойно.")
+    else:
+        _add_thought(agent_id, "Оглядываясь назад, я вижу, чему научилась.")
+
+
+async def _daemon_tick(agent_id: str):
+    """One daemon tick for one agent: sleep management + autonomous life"""
+    agent = agent_states[agent_id]
+
+    # 1. Sleep cycle in progress → just progress it
+    if agent.get("sleeping"):
+        _sleep_tick(agent_id)
+        if agent.get("sleep_ticks_remaining", 0) <= 0:
+            _wake_up(agent_id)
+        return
+
+    # 2. Headless mode: no live client for a while
+    now = time.time()
+    headless = (now - agent.get("last_perception_real_time", 0.0)) > HEADLESS_TIMEOUT
+
+    if headless:
+        tick = _headless_step(agent_id)
+        # Periodic reflection
+        if agent["headless_ticks"] % REFLECT_EVERY_TICKS == 0:
+            await _reflect(agent_id)
+        # Sleep when exhausted
+        if agent["body"].get("energy", 100) < SLEEP_ENERGY_THRESHOLD:
+            _start_sleep(agent_id)
+    else:
+        # Connected mode: only manage sleep based on reported energy
+        if agent["body"].get("energy", 100) < SLEEP_ENERGY_THRESHOLD and not agent.get("sleeping"):
+            _start_sleep(agent_id)
+
+
+async def _background_daemon_loop():
+    """Main daemon loop — runs forever, ticks every agent"""
+    logger.info("Background daemon started")
+    while True:
+        try:
+            await asyncio.sleep(DAEMON_INTERVAL)
+            for agent_id in list(agent_states.keys()):
+                try:
+                    await _daemon_tick(agent_id)
+                except Exception as exc:  # never let one agent kill the daemon
+                    logger.warning(f"Daemon tick failed for {agent_id}: {exc}")
+        except asyncio.CancelledError:
+            logger.info("Background daemon stopped")
+            raise
+        except Exception as exc:
+            logger.error(f"Background daemon error: {exc}")
+
+
+@app.on_event("startup")
+async def _start_daemon():
+    asyncio.get_event_loop().create_task(_background_daemon_loop())
+
+
+@app.post("/agent/{agent_id}/sleep")
+async def force_sleep(agent_id: str):
+    """Manually put the agent to sleep"""
+    init_agent(agent_id)
+    _start_sleep(agent_id)
+    return {"status": "sleeping", "agent_id": agent_id}
+
+
+@app.post("/agent/{agent_id}/wake")
+async def force_wake(agent_id: str):
+    """Manually wake the agent"""
+    init_agent(agent_id)
+    if agent_states[agent_id].get("sleeping"):
+        _wake_up(agent_id)
+    return {"status": "awake", "agent_id": agent_id}
+
 
 # ──────────────────────────────────────────────────────────────
 # GOD VIEW DASHBOARD (static frontend)

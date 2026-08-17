@@ -295,7 +295,8 @@ function renderAgent() {
   const a = state.body || {};
   // Position from world snapshot when available (agent may not be in body)
   const pos = (world && world.agent_position) ? world.agent_position : (a.position || [0, 0]);
-  $('agent-info').innerHTML = `<b>KATO</b> · позиция (${pos[0]},${pos[1]}) · цель: <b>${state.current_goal || '—'}</b>`;
+  const sleepBadge = state.sleeping ? ' · <span style="color:#8a6ae0">😴 СПИТ</span>' : '';
+  $('agent-info').innerHTML = `<b>KATO</b> · позиция (${pos[0]},${pos[1]}) · цель: <b>${state.current_goal || '—'}</b>${sleepBadge}`;
   setBar('energy', a.energy); setBar('comfort', a.comfort);
   setBar('stress', a.stress); setBar('integrity', a.integrity);
 }
@@ -418,6 +419,25 @@ function renderEvents() {
   for (const e of events.slice(0, 20)) {
     const d = document.createElement('div');
     d.className = 'evt-item';
+    // Thoughts (inner monologue) get special styling
+    if (e.type === 'thought') {
+      d.innerHTML = `💭 ${e.summary || ''}`;
+      d.style.color = '#f0a6d2';
+      log.appendChild(d);
+      continue;
+    }
+    if (e.type === 'sleep') {
+      d.innerHTML = `😴 ${e.summary || 'засыпает'}`;
+      d.style.color = '#8a6ae0';
+      log.appendChild(d);
+      continue;
+    }
+    if (e.type === 'wake') {
+      d.innerHTML = `🌅 ${e.summary || 'проснулась'}`;
+      d.style.color = '#8a6ae0';
+      log.appendChild(d);
+      continue;
+    }
     const ok = e.result && e.result.success !== false;
     const cls = e.result && e.result.success === false ? 'bad' : 'good';
     const act = e.action || e.type || '?';
