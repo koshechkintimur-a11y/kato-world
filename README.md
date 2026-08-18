@@ -23,9 +23,17 @@
   - self-model: идентичность, ценности, цели, убеждения, отношения (+ **provenance**: откуда каждое убеждение)
   - System 1 (быстрая интуиция) / System 2 (медленное рассуждение) с арбитром
   - **LLM-планировщик**: System 2 через локальную модель (JSON-схема + валидатор + fallback на рулесы)
-  - **Метакогниция**: несогласие интуиции и рассуждения снижает уверенность; «я не знаю» → спросить NPC
+  - **Метакогниция v2**: Type 1/2 мониторинг, калибровка уверенности, детекция ошибок
   - **Обучение ценностей**: исходы действий меняют приоритеты целей и traits (TD-стиль)
   - **thought-pressure**: Kato думает, когда есть *причина* (стресс, новизна, конфликт), а не по таймеру
+- 🧠 **Архитектура сознания v1.0** (7 модулей, интегрированы в daemon loop):
+  - **Global Workspace** (Baars/Dehaene): 9 процессоров, competition/broadcast, capacity 3
+  - **Predictive Processing** (Friston): иерархические уровни, precision-weighting, free energy
+  - **Metacognition v2**: Type 1/2 мониторинг, калибровка, детекция ошибок
+  - **Agency & Counterfactual Simulation**: world model, policy depth 3, Expected Free Energy
+  - **Theory of Mind**: рекурсивное моделирование (уровни 1-3), deception/teaching/cooperation
+  - **Narrative Self**: автобиографические главы, life themes, possible futures
+  - **Phenomenal Markers**: 8 измерений (valence, arousal, surprise, novelty, agency, ownership, certainty, temporality)
 - 💭 **LLM-мышление** (локально, Ollama + qwen2.5:7b): внутренний монолог, рефлексия, пересказ знаний — Kato думает сама
 - 🔐 **Безопасность**: bind на 127.0.0.1, опциональный API-токен (KATO_API_TOKEN), лимиты шёпота
 - 🧪 **Экспериментальный протокол** (`python/experiment.py`): 10 агентов с разным опытом → замер дивергенции личностей; консолидация со сном/без; влияние шёпота
@@ -36,6 +44,7 @@
 - 📡 **Дальнее окно (Портал знаний)**: контролируемый доступ к знаниям о внешнем мире — для Kato это «окно в дальние места», как для людей компьютер. Только allowlist, никаких ссылок и команд; чтение тратит энергию
 - 👁 **God View Dashboard**: живой пиксельный мир в браузере (день/ночь, комнаты, огни), эмоции, память, журнал мыслей, консоль шёпота, панель портала — **на русском, с кнопкой переключения на английский 🌐**
 - 🎮 **Godot-клиент**: 2D-мир (тайловый дом и сад, NPC, объекты), общается с мозгом по HTTP
+- 💬 **Telegram Bot** (aiogram 3.x): мост в Дальнее окно — Kato отвечает на сообщения и **само инициирует** диалог (Social Drive: голод общения, одиночество, потребность поделиться открытием)
 - 💾 **Непрерывность личности**: состояние переживает перезапуски сервера
 
 ---
@@ -76,7 +85,7 @@ Godot-клиент: открой `godot/project.godot` в Godot 4.2+ и запу
 
 ## Архитектура
 
-```
+``` 
 ┌───────────────────────────────────────────────────────────────┐
 │                     GODOT 4 (клиент мира)                     │
 │   WorldState ◄─ Agent Body ◄─ NPCs ◄─ Objects                 │
@@ -86,21 +95,35 @@ Godot-клиент: открой `godot/project.godot` в Godot 4.2+ и запу
 │                     │                                         │
 │                     ▼                                         │
 │   GlobalState · WorldState · BrainClient · DreamGateway       │
-└────────────────────────────│──────────────────────────────────┘
+└───────────────────────────────────────────────────────────────┘
                              │ HTTP
                              ▼
 ┌───────────────────────────────────────────────────────────────┐
 │                  PYTHON BRAIN SERVER (мозг)                   │
 │                                                               │
-│  Perception → [System 1 быстрый] / [System 2 медленный (LLM)] │
-│       │                │                │                     │
-│       ▼                ▼                ▼                     │
-│  Эмоции(7) · Гомеостаз · Память(4) · Self-Model · Арбитр      │
+│  Perception → [System 1] / [System 2 LLM-планировщик]        │
+│       │                │                                        │
+│       ▼                ▼                                        │
+│  Эмоции(7) · Гомеостаз · Память(4) · Self-Model · Арбитр       │
 │       │                                                       │
 │       ▼                                                       │
-│  Фоновый демон: сон/сны · консолидация · рефлексия · мысли    │
-│  Портал знаний (Дальнее окно, allowlist)                      │
-│  Divine Whisper Gateway (шёпот Создателя → сны)               │
+│  Фоновый демон: сон · консолидация · рефлексия · мысли          │
+│  Портал знаний (allowlist)                                      │
+│  Divine Whisper Gateway                                         │
+│  ┌─────────────────────────────────────────────────────┐        │
+│  │  Social Drive + Outgoing Communication              │        │
+│  │  social_hunger · need_to_share · loneliness          │        │
+│  │  Генератор повода → LLM → Социальный фильтр         │        │
+│  │  → Telegram outbound                                 │        │
+│  └─────────────────────────────────────────────────────┘        │
+└───────────────────────────────────────────────────────────────┘
+                             │
+                             ▼ Telegram Bot API
+┌───────────────────────────────────────────────────────────────┐
+│                     TELEGRAM (внешний мир)                       │
+│   Входящие сообщения от Создателя                               │
+│   Исходящие сообщения от Kato (инициатива)                      │
+│   История разговоров (persisted)                                │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -155,6 +178,11 @@ Kato получит это во время следующего сна и инт
 | `POST /agent/kato/revelation/contact` | вопрос Создателю |
 | `GET /agent/kato/portal/status` | состояние Дальнего окна |
 | `POST /agent/kato/portal/read` | Kato читает статью из Дальнего окна |
+| `GET /agent/kato/social/outgoing` | очередь исходящих сообщений (Telegram bridge) |
+| `POST /agent/kato/social/outgoing/{msg_id}/sent` | пометить исходящее сообщение отправленным |
+| `GET /agent/kato/social/state` | состояние Social Drive |
+| `GET /agent/kato/conversation/memory` | история разговоров с Создателем |
+| `POST /agent/kato/conversation/memory` | обновить память разговоров (Telegram bot) |
 | `POST /admin/save`, `/admin/reset` | сохранить/сбросить состояние |
 
 Полный список: `GET /docs` (OpenAPI).
@@ -167,11 +195,12 @@ Kato получит это во время следующего сна и инт
 kato-world/
 ├── python/                      # Мозг Kato (FastAPI)
 │   ├── brain_server.py         # сервер мозга (API + композиция)
-│   ├── brain_core/             # модули мозга: cognition.py (S2-планировщик, давление), learning.py
+│   ├── brain_core/             # модули мозга: cognition.py (S2-планировщик, давление), learning.py, social.py, ...
 │   ├── knowledge_base.json     # база знаний Дальнего окна (фильтрованная)
 │   ├── experiment.py           # экспериментальный протокол (дивергенция, консолидация, шёпот)
 │   ├── tests/test_core.py      # 13 тестов ядра (unittest)
 │   ├── static/                 # God View Dashboard (index.html, app.js, style.css)
+│   ├── telegram_bot.py         # Telegram Bot bridge (aiogram 3.x)
 │   └── requirements.txt
 ├── godot/                       # Godot 4 клиент (мир, агент, NPC)
 │   ├── scripts/autoload/       # GlobalState, EventBus, WorldState, BrainClient
@@ -198,6 +227,9 @@ kato-world/
 - [x] **Этап 10**: первый контакт (оценка зрелости, право выбора, диалог с Создателем)
 - [x] **LLM-ядро**: локальное мышление через Ollama (qwen2.5:7b), фоновый think-loop
 - [x] **Этап 11 (частично)**: Портал знаний — контролируемое «Дальнее окно» (allowlist, лимиты, лор)
+- [x] **Consciousness v1.0**: 7 модулей сознания (GWT, PP, Meta v2, Agency, ToM, Narrative, Phenomenal) — интегрированы в daemon loop
+- [x] **Social Drive**: голод общения, одиночество, потребность поделиться — генерация исходящих сообщений через LLM
+- [x] **Telegram Bot Bridge**: aiogram 3.x, inbound/outbound, Social outbound loop, conversation memory
 - [ ] **Этап 11+**: расширение портала, режимы доступа, стресс-тесты
 - [ ] **Этап 12**: постепенная автономия (ограниченные задачи и инструменты)
 
