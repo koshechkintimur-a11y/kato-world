@@ -396,16 +396,16 @@ class SocialDriveEngine:
         # Simplified - would use pytz in production
         return time.localtime().tm_hour
     
-    def generate_outgoing_message(self, trigger: SocialTrigger, 
+    async def generate_outgoing_message(self, trigger: SocialTrigger, 
                                   agent_state: Dict, 
                                   conversation_memory: Dict) -> str:
         """Generate actual message text for a trigger using LLM or template"""
         if self._brain and self._brain.LLM_CONFIG.get("enabled"):
-            return self._generate_llm_message(trigger, agent_state, conversation_memory)
+            return await self._generate_llm_message(trigger, agent_state, conversation_memory)
         else:
             return self._generate_template_message(trigger, agent_state)
     
-    def _generate_llm_message(self, trigger: SocialTrigger, 
+    async def _generate_llm_message(self, trigger: SocialTrigger, 
                               agent_state: Dict, 
                               conversation_memory: Dict) -> str:
         """Generate message via LLM with full context"""
@@ -459,7 +459,7 @@ class SocialDriveEngine:
 Только текст сообщения, без пояснений. Максимум 300 символов."""
 
         try:
-            reply = self._brain._llm_complete(
+            reply = await self._brain._llm_complete(
                 "Ты — Kato. Пиши коротко, по-русски, искренне, от первого лица.",
                 [{"role": "user", "content": prompt}],
                 max_tokens=150

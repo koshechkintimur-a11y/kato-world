@@ -18,9 +18,9 @@ echo.
 rem ---- Загрузка .env (токен и параметры) ----
 if exist ".env" (
     for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do set "%%a=%%b"
-    echo [0/5] .env загружен
+    echo [0/6] .env загружен
 ) else (
-    echo [0/5] ВНИМАНИЕ: .env не найден — бот не запустится без токена!
+    echo [0/6] ВНИМАНИЕ: .env не найден — бот не запустится без токена!
 )
 
 rem ---- Проверка Python ----
@@ -34,15 +34,15 @@ if errorlevel 1 (
     )
     set "PY=py -3"
 )
-echo [1/5] Python: %PY%
+echo [1/6] Python: %PY%
 
 rem ---- Остановить старые процессы мозга и бота ----
-echo [2/5] Останавливаю старые процессы...
+echo [2/6] Останавливаю старые процессы...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"name='python.exe' or name='pythonw.exe'\" | Where-Object { $_.CommandLine -match 'brain_server\.py|telegram_bot\.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 ping -n 3 127.0.0.1 >nul
 
 rem ---- Zapret (только если ещё не запущен) ----
-echo [3/5] Проверяю Zapret (DPI-обход)...
+echo [3/6] Проверяю Zapret (DPI-обход)...
 tasklist /FI "IMAGENAME eq winws.exe" 2>nul | findstr /I "winws.exe" >nul
 if not errorlevel 1 goto zapret_ok
 if not exist "%ZAPRET_BAT%" goto zapret_missing
@@ -56,8 +56,34 @@ goto zapret_done
 echo        ВНИМАНИЕ: %ZAPRET_BAT% не найден — Zapret не запущен
 :zapret_done
 
+rem ---- Ollama (LLM Kato; без неё — шаблонные фразы) ----
+echo [4/6] Проверяю Ollama (LLM)...
+netstat -ano | findstr ":11434" | findstr "LISTENING" >nul
+if not errorlevel 1 goto ollama_ok
+if not exist "C:\Users\Geroin\AppData\Local\Programs\Ollama\ollama.exe" goto ollama_missing
+echo        Ollama не запущена — стартую...
+powershell -NoProfile -Command "Start-Process -FilePath 'C:\Users\Geroin\AppData\Local\Programs\Ollama\ollama.exe'"
+set /a otries=0
+:wait_ollama
+ping -n 3 127.0.0.1 >nul
+netstat -ano | findstr ":11434" | findstr "LISTENING" >nul
+if errorlevel 1 (
+    set /a otries+=1
+    if !otries! lss 10 goto wait_ollama
+    echo        ВНИМАНИЕ: Ollama не поднялась — Kato будет отвечать шаблонами
+    goto ollama_done
+)
+echo        Ollama готова (порт 11434)
+goto ollama_done
+:ollama_ok
+echo        Ollama уже работает
+goto ollama_done
+:ollama_missing
+echo        ВНИМАНИЕ: ollama.exe не найден — Kato будет отвечать шаблонами
+:ollama_done
+
 rem ---- Мозг ----
-echo [4/5] Запускаю мозг Kato (порт 8080)...
+echo [5/6] Запускаю мозг Kato (порт 8080)...
 start "kato-brain" /min cmd /c "cd /d %CD% && %PY% python\brain_server.py >> "%LOG_DIR%\brain.log" 2>&1"
 
 rem ---- Ждём портал (до 40 сек) ----
@@ -101,7 +127,7 @@ if errorlevel 1 (
 )
 
 rem ---- Бот ----
-echo [5/5] Запускаю Telegram-бота...
+echo [6/6] Запускаю Telegram-бота...
 start "kato-bot" /min cmd /c "cd /d %CD% && call start_bot.bat >> "%LOG_DIR%\bot.log" 2>&1"
 ping -n 7 127.0.0.1 >nul
 

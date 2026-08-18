@@ -3281,7 +3281,7 @@ async def _consciousness_tick(agent_id: str, headless: bool):
                 if selected:
                     # Generate message
                     conversation_memory = agent.get("conversation_memory", {})
-                    message = social_module.generate_outgoing_message(selected, agent, conversation_memory)
+                    message = await social_module.generate_outgoing_message(selected, agent, conversation_memory)
                     if message:
                         social_module.queue_message(message, selected)
                         # Mark trigger as handled
