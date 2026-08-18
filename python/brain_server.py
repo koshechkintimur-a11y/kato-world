@@ -3373,20 +3373,35 @@ def _serializable_memories(mem: Dict) -> Dict:
     return out
 
 
+def _stringify_keys(obj):
+    """Recursively convert non-primitive dict keys (e.g. PhenomenalDimension enums) to str.
+
+    Fixes 'State save failed: keys must be str, int, float, bool or None'
+    which silently broke persistence (no kato_state.json on disk).
+    """
+    if isinstance(obj, dict):
+        return {
+            (k if isinstance(k, (str, int, float, bool)) else str(k)): _stringify_keys(v)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_stringify_keys(i) for i in obj]
+    return obj
+
+
 def _save_state(path: str = None):
     try:
         path = path or os.path.join(_DATA_DIR, STATE_FILE)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        payload = {
+        payload = _stringify_keys({
             "saved_at": time.time(),
-            "agents": {aid: json.loads(json.dumps(agent, ensure_ascii=False, default=str))
-                       for aid, agent in agent_states.items()},
+            "agents": {aid: agent for aid, agent in agent_states.items()},
             "self_models": self_model,
             "memories": {aid: _serializable_memories(mem) for aid, mem in memory_store.items()},
             "divine_whispers": divine_whispers,
             "quests": _quests,
             "dialogue_states": _dialogue_states
-        }
+        })
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=1, default=str)
