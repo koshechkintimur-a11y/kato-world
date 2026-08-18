@@ -237,10 +237,12 @@ class SocialDriveEngine:
         # 4. Check triggers
         new_triggers = self._check_triggers(tick, agent_state, is_night)
         
-        # Add to pending triggers
+        # Add to pending triggers (cap to avoid unbounded growth when filter blocks)
         for trigger in new_triggers:
             self.pending_triggers.append(trigger)
             self.trigger_history.append(trigger)
+        if len(self.pending_triggers) > 50:
+            self.pending_triggers = self.pending_triggers[-50:]
         
         return new_triggers
     
@@ -347,8 +349,39 @@ class SocialDriveEngine:
         return None
     
     def _social_filter_ok(self, trigger: SocialTrigger) -> bool:
-        """Check if trigger passes social filter (anti-spam, boundaries)"""
-        # TEMPORARILY DISABLED FOR TESTING
+        """Check if trigger passes social filter (anti-spam, boundaries).
+
+        Восстановлен 2026-08-18: был отключён (# TEMPORARILY DISABLED FOR TESTING),
+        из-за чего каждый тик ставил в очередь сообщения и очередь выросла до 2400+ дублей.
+        """
+        now = time.time()
+
+        # 1. Max outgoing per day (anti-spam cap, default 5)
+        if self.outgoing_count_today >= self.config["max_outgoing_per_day"]:
+            return False
+
+        # 2. Min interval since last outgoing (~30 min).
+        #    last_outgoing_tick хранится как int(time.time()*5) → пересчёт в секунды.
+        if self.last_outgoing_tick > 0:
+            last_outgoing_sec = self.last_outgoing_tick / 5.0
+            if now - last_outgoing_sec < 1800:
+                return False
+
+        # 3. Creator sleep hours (23:00–08:00) — не беспокоить
+        hour = self._get_current_hour()
+        if hour >= self.creator_sleep_start or hour < self.creator_sleep_end:
+            return False
+
+        # 4. Grace period after recent contact (~10 min). tick = 5s на тик.
+        if self.last_contact_tick > 0:
+            last_contact_sec = self.last_contact_tick * 5.0
+            if now - last_contact_sec < 600:
+                return False
+
+        # 5. No repetition (max 2 same trigger type in window)
+        if self._is_repetitive(trigger.trigger_type):
+            return False
+
         return True
     
     def _is_repetitive(self, trigger_type: SocialTriggerType) -> bool:

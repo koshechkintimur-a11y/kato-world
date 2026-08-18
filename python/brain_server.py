@@ -3398,7 +3398,7 @@ def _save_state(path: str = None):
 
 def _load_state(path: str = None):
     try:
-        path = path or os.path.join(_DATA_DIR, _STATE_FILE)
+        path = path or os.path.join(_DATA_DIR, STATE_FILE)
         if not os.path.isfile(path):
             return
         with open(path, encoding="utf-8") as f:
