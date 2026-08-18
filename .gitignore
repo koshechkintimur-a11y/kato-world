@@ -4,3 +4,4 @@ python/data/
 user://
 *.import
 .godot/
+.env

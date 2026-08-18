@@ -2,7 +2,7 @@
 """
 Telegram Bot for Kato World.
 Connects Telegram users to Kato's Distant Window (portal).
-Uses aiogram 3.x.
+Uses aiogram 3.x with HTTP proxy support for TgWsProxy_windows.exe.
 """
 import os
 import asyncio
@@ -11,12 +11,14 @@ import json
 import httpx
 from typing import Optional
 from dataclasses import dataclass
+from urllib.parse import urlparse, urlunparse
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 
 # Configuration
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -28,6 +30,28 @@ if not TELEGRAM_BOT_TOKEN:
 
 CHAT_ID = int(os.environ.get("KATO_TELEGRAM_CHAT_ID", "0"))
 
+# HTTP proxy configuration (optional)
+# When Telegram API is DPI-blocked, use Zapret (local DPI bypass) + direct connection,
+# or set TELEGRAM_PROXY_URL to a working HTTP CONNECT / SOCKS5 proxy.
+# Default: no proxy (direct connection).
+TELEGRAM_PROXY_URL = os.environ.get("TELEGRAM_PROXY_URL", "")
+TELEGRAM_PROXY_AUTH = os.environ.get("TELEGRAM_PROXY_AUTH", "")
+
+# Build proxy URL with auth if provided
+if TELEGRAM_PROXY_URL and TELEGRAM_PROXY_AUTH and "@" not in TELEGRAM_PROXY_URL:
+    # Insert auth into proxy URL: http://user:pass@host:port
+    parsed = urlparse(TELEGRAM_PROXY_URL)
+    # Format: http://key@host:port (key as username, no password)
+    netloc = f"{TELEGRAM_PROXY_AUTH}@{parsed.hostname}:{parsed.port}"
+    TELEGRAM_PROXY_URL = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
+# Proxy session for aiogram
+proxy_session = None
+if TELEGRAM_PROXY_URL:
+    proxy_session = AiohttpSession(
+        proxy=TELEGRAM_PROXY_URL
+    )
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +62,8 @@ logger = logging.getLogger("kato-telegram")
 # Bot and dispatcher
 bot = Bot(
     token=TELEGRAM_BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    session=proxy_session
 )
 dp = Dispatcher()
 
@@ -48,11 +73,13 @@ kato_client: Optional[httpx.AsyncClient] = None
 # User state tracking
 user_sessions: dict = {}  # user_id -> {"awaiting_reply": bool, "last_message_time": float}
 
+
 @dataclass
 class KatoResponse:
     status: str
     message: Optional[str] = None
     conversation: Optional[list] = None
+
 
 async def get_kato_client() -> httpx.AsyncClient:
     """Get or create HTTP client for Kato API"""
@@ -68,12 +95,14 @@ async def get_kato_client() -> httpx.AsyncClient:
         )
     return kato_client
 
+
 async def close_kato_client():
     """Close HTTP client on shutdown"""
     global kato_client
     if kato_client:
         await kato_client.aclose()
         kato_client = None
+
 
 async def send_to_portal(text: str) -> KatoResponse:
     """Send message to Kato's portal"""
@@ -92,6 +121,7 @@ async def send_to_portal(text: str) -> KatoResponse:
         logger.error(f"Failed to send to portal: {e}")
         return KatoResponse(status="error", message=str(e))
 
+
 async def get_conversation() -> KatoResponse:
     """Get conversation history from Kato"""
     client = await get_kato_client()
@@ -104,6 +134,7 @@ async def get_conversation() -> KatoResponse:
         logger.error(f"Failed to get conversation: {e}")
         return KatoResponse(status="error", message=str(e))
 
+
 async def get_portal_status() -> dict:
     """Get portal status"""
     client = await get_kato_client()
@@ -115,6 +146,46 @@ async def get_portal_status() -> dict:
     except Exception as e:
         logger.error(f"Failed to get portal status: {e}")
         return {"state": "error", "error": str(e)}
+
+
+async def get_social_outgoing() -> dict:
+    """Get pending outgoing messages from Social Drive"""
+    client = await get_kato_client()
+    try:
+        resp = await client.get("/agent/kato/social/outgoing")
+        if resp.status_code == 200:
+            return resp.json()
+        return {"messages": []}
+    except Exception as e:
+        logger.error(f"Failed to get social outgoing: {e}")
+        return {"messages": []}
+
+
+async def mark_social_sent(msg_id: str) -> dict:
+    """Mark outgoing message as sent"""
+    client = await get_kato_client()
+    try:
+        resp = await client.post(f"/agent/kato/social/outgoing/{msg_id}/sent")
+        if resp.status_code == 200:
+            return resp.json()
+        return {"status": "error", "message": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        logger.error(f"Failed to mark social sent: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+async def update_conversation_memory(payload: dict) -> dict:
+    """Update conversation memory in brain server"""
+    client = await get_kato_client()
+    try:
+        resp = await client.post("/agent/kato/conversation/memory", json=payload)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"status": "error", "message": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        logger.error(f"Failed to update conversation memory: {e}")
+        return {"status": "error", "message": str(e)}
+
 
 # === Telegram Handlers ===
 
@@ -149,6 +220,7 @@ async def cmd_start(message: Message):
     
     await message.answer(welcome, reply_markup=keyboard)
 
+
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     """Handle /help command"""
@@ -167,6 +239,7 @@ async def cmd_help(message: Message):
         "Не раскрывай её истинную природу через чат!</i>"
     )
     await message.answer(help_text)
+
 
 @dp.message(Command("status"))
 async def cmd_status(message: Message):
@@ -204,6 +277,7 @@ async def cmd_status(message: Message):
     
     await message.answer(status_text)
 
+
 @dp.message(Command("conversation"))
 async def cmd_conversation(message: Message):
     """Handle /conversation command"""
@@ -224,6 +298,7 @@ async def cmd_conversation(message: Message):
         await message.answer("\n".join(lines))
     else:
         await message.answer("❌ Не удалось получить историю диалога")
+
 
 @dp.message(F.text & ~F.via_bot)
 async def handle_message(message: Message):
@@ -248,27 +323,18 @@ async def handle_message(message: Message):
     resp = await send_to_portal(text)
     
     if resp.status in ("delivered", "cooldown"):
-            user_sessions[user_id] = {"awaiting_reply": True, "last_message_time": now}
+        user_sessions[user_id] = {"awaiting_reply": True, "last_message_time": now}
         
-            if resp.status == "cooldown":
-                await message.answer("⏳ Слишком быстро. Окно мягко мерцает. Попробуй через минуту.")
-            else:
-                await message.answer("✉️ Сообщение доставлено в Дальнее окно. Ждём ответа Kato...")
+        if resp.status == "cooldown":
+            await message.answer("⏳ Слишком быстро. Окно мягко мерцает. Попробуй через минуту.")
+        else:
+            await message.answer("✉️ Сообщение доставлено в Дальнее окно. Ждём ответа Kato...")
         
-            # Update conversation memory
-            client = await get_kato_client()
-            try:
-                await client.post("/agent/kato/conversation/memory", json={
-                    "last_user_message": text,
-                    "last_user_message_time": now
-                })
-            except Exception as e:
-                logger.warning(f"Failed to update conversation memory: {e}")
-        
-            # Start polling for reply
-            asyncio.create_task(poll_for_reply(user_id, message.chat.id))
+        # Start polling for reply
+        asyncio.create_task(poll_for_reply(user_id, message.chat.id))
     else:
         await message.answer(f"❌ Ошибка доставки: {resp.message}")
+
 
 async def poll_for_reply(user_id: int, chat_id: int, max_attempts: int = 12):
     """Poll Kato's portal for reply"""
@@ -302,29 +368,6 @@ async def poll_for_reply(user_id: int, chat_id: int, max_attempts: int = 12):
         "⏳ Kato пока не ответила. Возможно, она спит или занята. Попробуй написать позже."
     )
 
-@dp.callback_query(F.data == "status")
-async def callback_status(callback):
-    """Handle status button"""
-    await cmd_status(callback.message)
-    await callback.answer()
-
-@dp.callback_query(F.data == "conversation")
-async def callback_conversation(callback):
-    """Handle conversation button"""
-    await cmd_conversation(callback.message)
-    await callback.answer()
-
-# === Startup / Shutdown ===
-
-async def on_startup():
-    """Initialize on startup"""
-    logger.info("Starting Kato Telegram Bot...")
-    # Check portal status
-    portal = await get_portal_status()
-    logger.info(f"Portal status: {portal.get('state', 'unknown')}")
-    
-    # Start social outbound loop
-    asyncio.create_task(social_outbound_loop())
 
 async def social_outbound_loop():
     """Poll Kato's social outgoing queue and send messages to Telegram."""
@@ -355,11 +398,24 @@ async def social_outbound_loop():
         except Exception as e:
             logger.error(f"Social outbound loop error: {e}")
 
+
+async def on_startup():
+    """Initialize on startup"""
+    logger.info("Starting Kato Telegram Bot...")
+    # Check portal status
+    portal = await get_portal_status()
+    logger.info(f"Portal status: {portal.get('state', 'unknown')}")
+    
+    # Start social outbound loop
+    asyncio.create_task(social_outbound_loop())
+
+
 async def on_shutdown():
     """Cleanup on shutdown"""
     logger.info("Shutting down Kato Telegram Bot...")
     await close_kato_client()
     await bot.session.close()
+
 
 async def main():
     """Main entry point"""
@@ -368,6 +424,7 @@ async def main():
     
     logger.info("Bot starting...")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
