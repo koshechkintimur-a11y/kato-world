@@ -175,6 +175,15 @@ def init_agent(agent_id: str):
                 "offer_tick": None,
                 "choice": None,
                 "journal": []
+                "journal": []
+            # Conversation memory with Creator (Telegram)
+            "conversation_memory": {
+                "summary": "",
+                "key_topics": [],
+                "emotional_arc": [],
+                "promises": [],
+                "last_conversation": {}
+            },
             }
         }
         
@@ -1787,8 +1796,6 @@ def _init_consciousness_modules(agent_id: str):
         create_agency_engine,
         create_theory_of_mind,
         create_narrative_self,
-        create_phenomenal_engine,
-        create_social_drive,
     )
     
     if agent_id not in consciousness_modules:
@@ -1799,8 +1806,6 @@ def _init_consciousness_modules(agent_id: str):
             "agency": create_agency_engine(agent_id),
             "theory_of_mind": create_theory_of_mind(agent_id),
             "narrative_self": create_narrative_self(agent_id),
-            "phenomenal": create_phenomenal_engine(agent_id),
-            "social": create_social_drive(agent_id),
         }
         # Set brain references for all modules - use the running brain_server instance
         import sys
@@ -2462,80 +2467,6 @@ async def _portal_maybe_reply(agent_id: str):
     return msg
 
 
-
-# ═══════════════════════════════════════════════════════════════
-# SOCIAL OUTGOING (Telegram bridge) + CONVERSATION MEMORY
-# ═══════════════════════════════════════════════════════════════
-
-@app.get("/agent/{agent_id}/social/outgoing")
-async def get_social_outgoing(agent_id: str):
-    """Get pending outgoing messages from Social Drive."""
-    init_agent(agent_id)
-    modules = _init_consciousness_modules(agent_id)
-    social = modules.get("social")
-    if not social:
-        return {"messages": []}
-    messages = social.get_pending_messages()
-    return {
-        "messages": [
-            {"id": f"msg_{i}", "text": msg, "trigger_type": "social"}
-            for i, msg in enumerate(messages)
-        ]
-    }
-
-@app.post("/agent/{agent_id}/social/outgoing/{msg_id}/sent")
-async def mark_social_sent(agent_id: str, msg_id: str):
-    """Mark outgoing message as sent (remove from queue)."""
-    init_agent(agent_id)
-    modules = _init_consciousness_modules(agent_id)
-    social = modules.get("social")
-    if not social:
-        return {"status": "not_found"}
-    try:
-        idx = int(msg_id.split("_")[-1])
-        social.mark_sent_by_index(idx)
-        return {"status": "ok"}
-    except (ValueError, IndexError):
-        return {"status": "invalid_id"}
-
-@app.get("/agent/{agent_id}/social/state")
-async def get_social_state(agent_id: str):
-    """Get Social Drive state for dashboard."""
-    init_agent(agent_id)
-    modules = _init_consciousness_modules(agent_id)
-    social = modules.get("social")
-    if not social:
-        return {"drives": {}, "bonds": {}, "triggers": {}, "outgoing": {}}
-    return social.get_state()
-
-@app.get("/agent/{agent_id}/conversation/memory")
-async def get_conversation_memory(agent_id: str):
-    """Get conversation memory with Creator."""
-    init_agent(agent_id)
-    agent = agent_states[agent_id]
-    return agent.get("conversation_memory", {
-        "summary": "",
-        "key_topics": [],
-        "emotional_arc": [],
-        "promises": [],
-        "last_conversation": {}
-    })
-
-@app.post("/agent/{agent_id}/conversation/memory")
-async def update_conversation_memory(agent_id: str, payload: Dict):
-    """Update conversation memory (called by Telegram bot)."""
-    init_agent(agent_id)
-    agent = agent_states[agent_id]
-    if "conversation_memory" not in agent:
-        agent["conversation_memory"] = {
-            "summary": "",
-            "key_topics": [],
-            "emotional_arc": [],
-            "promises": [],
-            "last_conversation": {}
-        }
-    agent["conversation_memory"].update(payload)
-    return {"status": "updated"}
 def _portal_reply_template(text: str) -> str:
     low = text.lower()
     if "как дела" in low or "как ты" in low:
@@ -3253,57 +3184,8 @@ async def _consciousness_tick(agent_id: str, headless: bool):
             "agency": modules["agency"].get_state(),
             "theory_of_mind": modules["theory_of_mind"].get_state(),
             "narrative_self": modules["narrative_self"].get_state(),
-            "phenomenal": modules["phenomenal"].get_state(),
-            "social": modules["social"].get_state() if "social" in modules else {},
         }
-
-        # ---- SOCIAL DRIVE ----
-        # Social motivation, loneliness, need to share, bond tracking
-        if "social" in modules:
-            social_module = modules["social"]
-            # Ensure agent has social state
-            if "social" not in agent:
-                agent["social"] = {}
-            social_module.step(
-                perception.get("tick", 0),
-                perception,
-                agent,
-                memory_store.get(agent_id, {}),
-                dream_engine=None  # could pass dream engine if available
-            )
-            # Record social state for dashboard
-            agent["social_state"] = social_module.get_state()
-
-            # Check for outgoing triggers and queue messages
-            triggers = social_module.pending_triggers
-            if triggers:
-                selected = social_module.select_trigger(triggers)
-                if selected:
-                    # Generate message
-                    conversation_memory = agent.get("conversation_memory", {})
-                    message = social_module.generate_outgoing_message(selected, agent, conversation_memory)
-                    if message:
-                        social_module.queue_message(message, selected)
-                        # Mark trigger as handled
-                        social_module.pending_triggers.remove(selected)
-
-            # Handle outgoing queue
-            # Note: Messages are left in queue for Telegram Bot to poll via /social/outgoing
-            # The Bot will mark them as sent via /social/outgoing/{msg_id}/sent
-            pending = social_module.get_pending_messages()
-            if pending:
-                logger.info(f"Social outgoing queued ({len(pending)} messages waiting for Telegram Bot)")
-
-            # Handle silence from creator
-            if headless:
-                worry_msg = social_module.handle_silence(perception.get("tick", 0))
-                if worry_msg:
-                    social_module.queue_message(worry_msg, SocialTrigger(
-                        trigger_type=SocialTriggerType.LONELINESS,
-                        reason="worry_about_creator",
-                        priority=0.9
-                    ))
-    except Exception as exc:
+        # ---- SOCIAL DRIVE ----        # Social motivation, loneliness, need to share, bond tracking        if "social" in modules:            social_module = modules["social"]            # Ensure agent has social state            if "social" not in agent:                agent["social"] = {}            social_module.step(                perception.get("tick", 0),                perception,                agent,                memory_store.get(agent_id, {}),                dream_engine=None  # could pass dream engine if available            )            # Record social state for dashboard            agent["social_state"] = social_module.get_state()            # Check for outgoing triggers and queue messages            triggers = social_module.pending_triggers            if triggers:                selected = social_module.select_trigger(triggers)                if selected:                    # Generate message                    conversation_memory = agent.get("conversation_memory", {})                    message = social_module.generate_outgoing_message(selected, agent, conversation_memory)                    if message:                        social_module.queue_message(message, selected)                        # Mark trigger as handled                        social_module.pending_triggers.remove(selected)            # Handle outgoing queue            # Note: Messages are left in queue for Telegram Bot to poll via /social/outgoing            # The Bot will mark them as sent via /social/outgoing/{msg_id}/sent            pending = social_module.get_pending_messages()            if pending:                logger.info(f"Social outgoing queued ({len(pending)} messages waiting for Telegram Bot)")            # Handle silence from creator            if headless:                worry_msg = social_module.handle_silence(perception.get("tick", 0))                if worry_msg:                    social_module.queue_message(worry_msg, SocialTrigger(                        trigger_type=SocialTriggerType.LONELINESS,                        reason="worry_about_creator",                        priority=0.9                    ))    except Exception as exc:
         logger.error(f"Consciousness tick error for {agent_id}: {exc}", exc_info=True)
 
 

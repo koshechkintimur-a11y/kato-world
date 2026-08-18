@@ -26,6 +26,8 @@ KATO_API_TOKEN = os.environ.get("KATO_API_TOKEN", "")
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required but not set")
 
+CHAT_ID = int(os.environ.get("KATO_TELEGRAM_CHAT_ID", "0"))
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -246,15 +248,25 @@ async def handle_message(message: Message):
     resp = await send_to_portal(text)
     
     if resp.status in ("delivered", "cooldown"):
-        user_sessions[user_id] = {"awaiting_reply": True, "last_message_time": now}
+            user_sessions[user_id] = {"awaiting_reply": True, "last_message_time": now}
         
-        if resp.status == "cooldown":
-            await message.answer("⏳ Слишком быстро. Окно мягко мерцает. Попробуй через минуту.")
-        else:
-            await message.answer("✉️ Сообщение доставлено в Дальнее окно. Ждём ответа Kato...")
+            if resp.status == "cooldown":
+                await message.answer("⏳ Слишком быстро. Окно мягко мерцает. Попробуй через минуту.")
+            else:
+                await message.answer("✉️ Сообщение доставлено в Дальнее окно. Ждём ответа Kato...")
         
-        # Start polling for reply
-        asyncio.create_task(poll_for_reply(user_id, message.chat.id))
+            # Update conversation memory
+            client = await get_kato_client()
+            try:
+                await client.post("/agent/kato/conversation/memory", json={
+                    "last_user_message": text,
+                    "last_user_message_time": now
+                })
+            except Exception as e:
+                logger.warning(f"Failed to update conversation memory: {e}")
+        
+            # Start polling for reply
+            asyncio.create_task(poll_for_reply(user_id, message.chat.id))
     else:
         await message.answer(f"❌ Ошибка доставки: {resp.message}")
 
@@ -310,6 +322,38 @@ async def on_startup():
     # Check portal status
     portal = await get_portal_status()
     logger.info(f"Portal status: {portal.get('state', 'unknown')}")
+    
+    # Start social outbound loop
+    asyncio.create_task(social_outbound_loop())
+
+async def social_outbound_loop():
+    """Poll Kato's social outgoing queue and send messages to Telegram."""
+    logger.info("Social outbound loop started")
+    while True:
+        try:
+            await asyncio.sleep(10)  # Check every 10 seconds
+            
+            client = await get_kato_client()
+            try:
+                resp = await client.get("/agent/kato/social/outgoing")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    messages = data.get("messages", [])
+                    for msg in messages:
+                        msg_id = msg.get("id")
+                        text = msg.get("text")
+                        if text and CHAT_ID:
+                            try:
+                                await bot.send_message(CHAT_ID, f"💭 <b>Kato (инициатива):</b>\n\n{text}")
+                                # Mark as sent
+                                await client.post(f"/agent/kato/social/outgoing/{msg_id}/sent")
+                                logger.info(f"Sent social outgoing: {text[:50]}...")
+                            except Exception as e:
+                                logger.error(f"Failed to send social message: {e}")
+            except Exception as e:
+                logger.error(f"Social outbound loop error: {e}")
+        except Exception as e:
+            logger.error(f"Social outbound loop error: {e}")
 
 async def on_shutdown():
     """Cleanup on shutdown"""

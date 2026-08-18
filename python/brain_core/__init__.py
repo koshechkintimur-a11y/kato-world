@@ -19,6 +19,7 @@ from .agency import AgencyEngine, create_agency_engine
 from .theory_of_mind import TheoryOfMindEngine, create_theory_of_mind
 from .narrative_self import NarrativeSelfEngine, create_narrative_self
 from .phenomenal import PhenomenalEngine, create_phenomenal_engine
+from .social import SocialDriveEngine, SocialTrigger, SocialTriggerType, OutgoingMessage, BondProfile, create_social_drive
 
 __all__ = [
     "thought_pressure",
@@ -41,4 +42,10 @@ __all__ = [
     "create_narrative_self",
     "PhenomenalEngine",
     "create_phenomenal_engine",
+    "SocialDriveEngine",
+    "SocialTrigger",
+    "SocialTriggerType",
+    "OutgoingMessage",
+    "BondProfile",
+    "create_social_drive",
 ]
